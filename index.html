@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c131b" />
+    <title>Lunar Vision | Security Operations</title>
+    <link rel="icon" type="image/png" href="/logo/favicon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/logo/icon-192x192.png" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+      if (window.tailwind) tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              blue: {
+                50: '#ecfeff', 100: '#cffafe', 200: '#a5f3fc',
+                300: '#67e8f9', 400: '#76efd6', 500: '#22b8cb',
+                600: '#0e7490', 700: '#155e75', 800: '#164e63',
+                900: '#083344', 950: '#042029',
+              },
+              eagle: {
+                950: '#0c131b', // Workspace
+                900: '#121e29', // Panels
+                800: '#172633', // Raised surfaces / subtle borders
+                700: '#263643', // Interactive borders
+                600: '#728797', // Muted details
+                500: '#22b8cb', // Primary accent
+                400: '#76efd6', // Accent text
+                alert: '#ef4444', // Red
+                warning: '#f59e0b', // Amber
+                success: '#10b981', // Emerald
+              }
+            },
+            fontSize: {
+                'xxs': '0.65rem'
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        background-color: #020617;
+        color: #e2e8f0;
+        overflow: hidden; /* Prevent page scrolling for desktop app feel */
+      }
+      /* Custom Scrollbar for Panels */
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-thin::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-track {
+          background: #0f172a;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb {
+          background: #334155;
+          border-radius: 3px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+          background: #475569;
+      }
+      /* Leaflet Customization */
+      .leaflet-container {
+        background: #020617 !important;
+      }
+      .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+        background: #0f172a !important;
+        color: #e2e8f0 !important;
+        border: 1px solid #334155;
+        border-radius: 4px;
+      }
+
+      /* PRINT STYLES FOR FORMAL REPORTING */
+      @media print {
+        @page { 
+            margin: 10mm; 
+            size: A4; 
+        }
+        
+        /* Reset everything */
+        *, *::before, *::after {
+            box-shadow: none !important;
+        }
+        
+        html, body { 
+            background-color: white !important; 
+            color: black !important; 
+            overflow: visible !important;
+            height: auto !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        
+        /* Hide ALL UI elements by default */
+        .no-print,
+        .print-modal-controls,
+        .leaflet-control,
+        header,
+        aside,
+        nav,
+        .bg-eagle-900,
+        .bg-eagle-950,
+        .bg-eagle-800,
+        button { 
+            display: none !important; 
+            visibility: hidden !important;
+        }
+        
+        /* Show the print-only report */
+        .print-only-report {
+            display: block !important;
+            visibility: visible !important;
+        }
+        
+        .print-only-report .print-document {
+            display: block !important;
+            visibility: visible !important;
+        }
+        
+        /* When print modal is open, hide everything except the modal */
+        body:has(.print-document-wrapper) .print-only-report {
+            display: none !important;
+        }
+        
+        /* Make the print modal full screen */
+        body:has(.print-document-wrapper) .fixed {
+            position: static !important;
+            background: white !important;
+            display: block !important;
+            visibility: visible !important;
+        }
+        
+        /* Hide the scrollable wrapper background */
+        .print-document-wrapper {
+            background: white !important;
+            padding: 0 !important;
+            overflow: visible !important;
+            display: block !important;
+            visibility: visible !important;
+        }
+        
+        /* Make the print document the only visible thing */
+        .print-document {
+            position: relative !important;
+            width: 100% !important;
+            max-width: none !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+            color: black !important;
+            overflow: visible !important;
+            page-break-inside: auto;
+            box-shadow: none !important;
+        }
+        
+        /* Allow page breaks */
+        .print-document section {
+            page-break-inside: avoid;
+        }
+        
+        /* Ensure footer section prints */
+        .print-footer {
+            page-break-inside: avoid;
+            margin-top: 20px;
+        }
+        
+        /* Force text colors to black for readability */
+        .print-document * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        
+        /* Keep some colors for visual hierarchy */
+        .print-document .text-red-600,
+        .print-document .text-red-700,
+        .print-document .text-red-800 { 
+            color: #dc2626 !important; 
+        }
+        .print-document .text-gray-600,
+        .print-document .text-gray-700,
+        .print-document .text-slate-600,
+        .print-document .text-slate-700 {
+            color: #374151 !important;
+        }
+        .print-document .bg-red-50 { background-color: #fef2f2 !important; }
+        .print-document .bg-red-600 { background-color: #dc2626 !important; }
+        .print-document .bg-red-600 * { color: white !important; }
+        .print-document .bg-yellow-50 { background-color: #fefce8 !important; }
+        .print-document .bg-yellow-600 { background-color: #ca8a04 !important; }
+        .print-document .bg-yellow-600 * { color: white !important; }
+        .print-document .bg-blue-50 { background-color: #eff6ff !important; }
+        .print-document .bg-orange-50 { background-color: #fff7ed !important; }
+        .print-document .bg-slate-900 { background-color: #0f172a !important; }
+        .print-document .bg-slate-900 * { color: white !important; }
+        .print-document .bg-slate-100 { background-color: #f1f5f9 !important; }
+        .print-document .bg-gray-50 { background-color: #f9fafb !important; }
+        .print-document .bg-gray-800 { background-color: #1f2937 !important; }
+        .print-document .bg-gray-800 * { color: white !important; }
+        
+        /* Ensure images print */
+        img { 
+            max-width: 100% !important; 
+            page-break-inside: avoid;
+        }
+        
+        /* Show explicit print headers */
+        .print-header { 
+            display: block !important; 
+            margin-bottom: 20px; 
+            border-bottom: 2px solid black; 
+            padding-bottom: 10px; 
+        }
+        
+        /* Hide watermark in print */
+        .print-document .opacity-10 {
+            display: none !important;
+        }
+        
+        /* Ensure borders print */
+        .print-document [class*="border"] {
+            border-color: #d1d5db !important;
+        }
+      }
+      .print-header { display: none; }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

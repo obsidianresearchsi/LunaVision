@@ -1,0 +1,23 @@
+{
+  "name": "Lunar Vision",
+  "short_name": "Lunar Vision",
+  "description": "Security operations and investigation workspace",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c131b",
+  "theme_color": "#0c131b",
+  "icons": [
+    {
+      "src": "/logo/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

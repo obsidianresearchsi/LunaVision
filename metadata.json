@@ -1,0 +1,7 @@
+{
+  "name": "Lunar Vision",
+  "description": "A Law Enforcement Facial Recognition & Intelligence System replicating Clearview AI functionality with Role-Based Access Control and Forensic Analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

@@ -1,0 +1,43 @@
+@media screen {
+  .similarity-review-banner { padding: 14px 18px; border-bottom: 1px solid #527082; border-left: 3px solid #80deea; background: #0d2230; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
+  .similarity-review-banner > div { flex: 1; min-width: min(100%,280px); }
+  .similarity-review-banner strong { display: block; color: #d2eaf3; font-size: 12px; }
+  .similarity-review-banner p { color: #a1bac8; font-size: 11px; margin-top: 6px; line-height: 1.6; }
+  .similarity-review-banner span { display: block; color: #87a6b7; font: 9px 'JetBrains Mono',monospace; margin-top: 8px; overflow-wrap: anywhere; }
+  .similarity-review-banner button, .candidate-review-button { border: 1px solid #5790a6; color: #a5e7f2; background: #16384a; padding: 9px 12px; font-size: 11px; }
+  .similarity-review-banner button:disabled { opacity: .5; cursor: not-allowed; }
+  .candidate-review-button { padding: 5px 8px; }
+  .candidate-review-label { font-size: 9px; color: #b0c9d4; margin-top: 9px; border-top: 1px solid #2f4856; padding-top: 7px; }
+  .analyst-review-backdrop { position: fixed; inset: 0; background: #020b12d9; backdrop-filter: blur(4px); z-index: 120; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .analyst-review-dialog { width: min(680px,100%); max-height: calc(100dvh - 40px); overflow-y: auto; color: #d9e9f1; background: #0b1b26; border: 1px solid #3c6175; border-top: 2px solid #80deea; box-shadow: 0 25px 100px #0009; font-family: 'Inter',sans-serif; }
+  .analyst-review-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #2a4759; }
+  .analyst-review-heading > div { display: flex; align-items: center; gap: 10px; color: #b1e9f2; font-size: 17px; }
+  .analyst-review-heading button { padding: 5px; border: 1px solid #3c5768; }
+  .analyst-review-context { padding: 14px 20px; background: #142938; border-bottom: 1px solid #2a4759; }
+  .analyst-review-context p { font-size: 11px; line-height: 1.7; color: #b8cbd6; }
+  .analyst-review-context span { display: block; margin-top: 9px; color: #91afc1; font: 9px/1.6 'JetBrains Mono',monospace; overflow-wrap: anywhere; }
+  .analyst-review-dialog form { padding: 20px; }
+  .analyst-review-dialog fieldset { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .analyst-review-dialog fieldset > label:not(.analyst-review-ack) { font-size: 11px; color: #b5cbd8; margin-top: 7px; }
+  .analyst-review-dialog :is(select,textarea) { width: 100%; min-width: 0; background: #05131d; border: 1px solid #42667c; color: #d3e7f1; padding: 11px; font-size: 12px; border-radius: 2px; }
+  .analyst-review-dialog textarea { resize: vertical; }
+  .analyst-review-score { padding: 12px; border-left: 2px solid #80deea; background: #132d3d; }
+  .analyst-review-score strong { display: block; color: #a1e5f1; font-size: 22px; font-weight: 500; }
+  .analyst-review-score span { display: block; font-size: 10px; color: #a3bac8; margin-top: 7px; }
+  .analyst-review-ack { display: flex; align-items: flex-start; gap: 9px; font-size: 11px; color: #bcced8; line-height: 1.7; margin-top: 8px; }
+  .analyst-review-ack input { margin-top: 4px; accent-color: #80deea; }
+  .analyst-review-help { display: flex; align-items: flex-start; gap: 7px; font-size: 10px; line-height: 1.7; color: #8ba8b9; margin-top: 14px; }
+  .analyst-review-help svg { flex-shrink: 0; margin-top: 3px; }
+  .analyst-review-actions { display: flex; gap: 10px; justify-content: flex-end; border-top: 1px solid #2a4759; padding-top: 16px; margin-top: 18px; }
+  .analyst-review-actions button, .analyst-review-saved button { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 15px; color: #b8d2df; border: 1px solid #42667c; font-size: 12px; }
+  .analyst-review-actions button[type="submit"], .analyst-review-saved button { color: #03131b; background: #80deea; border-color: #80deea; }
+  .analyst-review-dialog button:disabled { opacity: .45; cursor: not-allowed; }
+  .analyst-review-dialog :is(button,select,textarea,input):focus-visible { outline: 2px solid #80deea; outline-offset: 3px; }
+  .analyst-review-error { display: flex; align-items: flex-start; gap: 8px; padding: 12px; color: #ffb1aa; border: 1px solid #a56060; background: #3a222b; font-size: 11px; line-height: 1.7; margin-bottom: 15px; }
+  .analyst-review-error svg { flex-shrink: 0; margin-top: 3px; }
+  .analyst-review-saved { padding: 30px 24px; }
+  .analyst-review-saved > svg { color: #6ee7ba; margin-bottom: 15px; }
+  .analyst-review-saved h2 { font-size: 18px; color: #d4f4e8; }
+  .analyst-review-saved p { margin: 14px 0; font-size: 12px; color: #adc6d2; line-height: 1.7; overflow-wrap: anywhere; }
+  @media (max-width: 639px) { .analyst-review-backdrop { padding: 10px; } .analyst-review-dialog { max-height: calc(100dvh - 20px); } .similarity-review-banner button { width: 100%; } }
+}
