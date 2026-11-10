@@ -193,6 +193,7 @@ export class SocialMediaCrawler extends EventEmitter {
                     faceToken: faceResult.faceToken,
                     name: `Unknown (${domain})`,
                     imageUrl: storageUrl,
+                    originalImageUrl: imgUrl,
                     sourceUrl: sourceUrl,
                     sourceDomain: domain,
                     coordinates: {

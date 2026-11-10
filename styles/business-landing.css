@@ -1,0 +1,93 @@
+.lv-business-home {
+  --ink: #0e171d;
+  --paper: #eff0e9;
+  --signal: #d5eb9b;
+  --muted: #aab8bd;
+  height: 100dvh;
+  overflow: auto;
+  background: var(--ink);
+  color: #f5f7ef;
+  font-family: Inter, 'Segoe UI', sans-serif;
+  scroll-behavior: smooth;
+}
+
+.lv-business-home * { box-sizing: border-box; }
+.lv-business-home a { color: inherit; text-decoration: none; }
+.lv-business-home a:focus-visible { outline: 2px solid #63882d; outline-offset: 5px; }
+.lv-bh-wrap { width: min(100% - 96px, 1320px); margin-inline: auto; }
+.lv-bh-skip { position: absolute; z-index: 2; left: 16px; top: 12px; padding: 10px; background: var(--ink); transform: translateY(-160%); }
+.lv-bh-skip:focus { transform: translateY(0); }
+.lv-bh-header { border-bottom: 1px solid #ffffff24; }
+.lv-bh-nav { min-height: 74px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 24px; }
+.lv-bh-brand { display: inline-flex; align-items: center; width: fit-content; }
+.lv-bh-brand img { display: block; height: auto; }
+.lv-bh-nav nav { display: flex; gap: 36px; color: #c6cfd0; font-size: 14px; }
+.lv-bh-nav nav a:hover, .lv-bh-footer a:hover, .lv-bh-hero-index a:hover { color: var(--signal); }
+.lv-bh-signin { justify-self: end; border: 1px solid #526066; padding: 10px 15px; white-space: nowrap; }
+.lv-bh-signin, .lv-bh-button, .lv-bh-footer a, .lv-bh-hero-index a { display: inline-flex; align-items: center; gap: 12px; }
+.lv-bh-signin:hover { border-color: var(--signal); }
+
+.lv-bh-hero { position: relative; isolation: isolate; display: grid; min-height: clamp(575px, 75dvh, 780px); }
+.lv-bh-hero-image, .lv-bh-hero::after { position: absolute; z-index: -1; inset: 0; width: 100%; height: 100%; }
+.lv-bh-hero-image { object-fit: cover; object-position: 59% 50%; }
+.lv-bh-hero::after {
+  content: '';
+  background: linear-gradient(90deg, #0e171dfb 0%, #0e171de6 23%, #0e171da8 48%, #0e171d21 83%),
+    linear-gradient(0deg, #0e171df0 0%, #0e171d00 30%);
+}
+.lv-bh-hero-inner { display: grid; grid-template-rows: 1fr auto; }
+.lv-bh-hero-copy { align-self: center; padding-block: clamp(72px, 10vw, 145px) 64px; }
+.lv-bh-kicker { display: flex; align-items: center; gap: 10px; font: 600 11px/1.5 Consolas, monospace; letter-spacing: .15em; text-transform: uppercase; color: var(--signal); }
+.lv-bh-kicker span { display: block; flex: 0 0 7px; height: 7px; background: currentColor; }
+.lv-bh-hero h1, .lv-business-home h2 { margin: 19px 0; font-weight: 570; letter-spacing: -.06em; line-height: 1.02; text-wrap: balance; }
+.lv-bh-hero h1 { max-width: 790px; font-size: clamp(52px, 7.2vw, 106px); }
+.lv-bh-intro { max-width: 480px; margin: 24px 0 32px; color: #d2dbdc; font-size: clamp(17px, 1.55vw, 21px); line-height: 1.55; }
+.lv-business-home .lv-bh-button { width: fit-content; justify-content: space-between; gap: 27px; padding: 15px 18px; background: var(--signal); color: #182018; font-weight: 700; white-space: nowrap; }
+.lv-business-home .lv-bh-button:hover { background: #e5f5bf; }
+.lv-bh-hero-index { display: flex; justify-content: space-between; gap: 16px; padding-block: 19px; border-top: 1px solid #ffffff45; color: #c9d5d5; font: 11px/1.5 Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.lv-bh-platform { background: var(--paper); color: var(--ink); padding-block: clamp(64px, 8vw, 118px); }
+.lv-bh-platform .lv-bh-kicker { color: #38551c; }
+.lv-business-home h2 { font-size: clamp(38px, 5vw, 70px); }
+.lv-bh-section-head { max-width: 760px; margin-bottom: 38px; }
+.lv-bh-capabilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid #c3c9bd; }
+.lv-bh-capabilities article { padding: clamp(20px, 3vw, 39px); }
+.lv-bh-capabilities article + article { border-left: 1px solid #c3c9bd; }
+.lv-bh-card-index { display: flex; align-items: center; justify-content: space-between; color: #435735; font: 12px Consolas, monospace; }
+.lv-bh-capabilities h3 { margin: 39px 0 10px; font-size: 23px; line-height: 1.2; font-weight: 660; letter-spacing: -.035em; }
+.lv-bh-capabilities p, .lv-bh-industries p:not(.lv-bh-kicker) { line-height: 1.65; }
+.lv-bh-capabilities p { color: #485652; }
+.lv-bh-industries { padding-block: clamp(64px, 8vw, 118px); border-bottom: 1px solid #ffffff24; }
+.lv-bh-industry-grid { display: grid; grid-template-columns: 1.2fr 1fr; align-items: center; gap: clamp(35px, 7vw, 120px); }
+.lv-bh-industries p:not(.lv-bh-kicker) { max-width: 510px; color: var(--muted); }
+.lv-bh-industries ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid #ffffff32; }
+.lv-bh-industries li { display: flex; align-items: center; gap: 15px; padding: 19px 4px; border-bottom: 1px solid #ffffff32; }
+.lv-bh-industries li svg { color: var(--signal); flex: 0 0 auto; }
+.lv-bh-cta { background: #1b282a; }
+.lv-bh-cta .lv-bh-wrap, .lv-bh-footer .lv-bh-wrap { display: flex; align-items: center; justify-content: space-between; gap: 22px; }
+.lv-bh-cta .lv-bh-wrap { padding-block: clamp(48px, 6vw, 84px); }
+.lv-bh-cta h2 { margin-bottom: 0; }
+.lv-bh-footer .lv-bh-wrap { padding-block: 28px; color: #bdc7c7; font-size: 13px; }
+
+@media (max-width: 850px) {
+  .lv-bh-wrap { width: calc(100% - 48px); }
+  .lv-bh-hero::after { background: linear-gradient(90deg, #0e171df5, #0e171d8c 72%), linear-gradient(0deg, #0e171de0, #0e171d00 35%); }
+  .lv-bh-industry-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .lv-bh-wrap { width: calc(100% - 36px); }
+  .lv-bh-nav { grid-template-columns: 1fr auto; min-height: 62px; }
+  .lv-bh-nav nav { display: none; }
+  .lv-bh-nav .lv-bh-brand img { width: 138px; }
+  .lv-bh-hero { min-height: 550px; }
+  .lv-bh-hero-copy { padding-block: 72px 46px; }
+  .lv-bh-hero h1 { font-size: clamp(44px, 11vw, 64px); }
+  .lv-bh-hero-index span { display: none; }
+  .lv-bh-capabilities { grid-template-columns: 1fr; }
+  .lv-bh-capabilities article + article { border-left: none; border-top: 1px solid #c3c9bd; }
+  .lv-bh-capabilities h3 { margin-top: 22px; }
+  .lv-bh-cta .lv-bh-wrap { align-items: start; flex-direction: column; }
+  .lv-bh-footer p { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-business-home { scroll-behavior: auto; }
+}

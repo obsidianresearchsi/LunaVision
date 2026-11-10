@@ -1,7 +1,7 @@
 {
   "name": "Lunar Vision",
   "short_name": "Lunar Vision",
-  "description": "Security operations and investigation workspace",
+  "description": "Camera management, footage review and incident records for businesses",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0c131b",

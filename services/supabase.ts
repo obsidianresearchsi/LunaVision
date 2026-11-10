@@ -2,7 +2,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const hostedPreview = import.meta.env.MODE === 'vercel';
+const hostedPreview = import.meta.env.MODE === 'vercel' && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED !== 'true';
 const workspaceUrl = hostedPreview ? '' : import.meta.env.VITE_SUPABASE_URL?.trim();
 const workspaceKey = hostedPreview ? '' : import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 

@@ -1,7 +1,12 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "npm ci --ignore-scripts",
   "buildCommand": "npm run build -- --mode vercel",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/agency", "destination": "/index.html" },
+    { "source": "/agency/admin", "destination": "/index.html" },
+    { "source": "/business", "destination": "/index.html" },
+    { "source": "/video-analysis", "destination": "/index.html" }
+  ]
 }
