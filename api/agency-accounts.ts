@@ -6,18 +6,23 @@ function json(status: number, data: object) {
 }
 
 export async function POST(request: Request) {
+  return issueAgencyAccount(request, process.env);
+}
+
+export async function issueAgencyAccount(request: Request, env: Record<string, string | undefined>, local = false) {
   const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/i)?.[1];
   if (!token) return json(401, { error: 'Sign in to issue an agency account.' });
 
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const origin = process.env.AGENCY_SETUP_ORIGIN;
+  const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL;
+  const key = env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY;
+  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const origin = env.AGENCY_SETUP_ORIGIN;
   if (!url || !key || !serviceKey || !origin) return json(503, { error: 'Account issuance is not configured.' });
 
   try {
     const callback = new URL('/agency', origin);
-    if (callback.protocol !== 'https:' || callback.username || callback.password) {
+    const localCallback = local && callback.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(callback.hostname);
+    if ((!localCallback && callback.protocol !== 'https:') || callback.username || callback.password) {
       return json(503, { error: 'Account setup requires a trusted HTTPS origin.' });
     }
     const auth = { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false };
@@ -45,12 +50,14 @@ export async function POST(request: Request) {
     const created = await admin.auth.admin.createUser({
       email, password: randomBytes(32).toString('base64url'), email_confirm: true,
     });
+    if (created.error?.code === 'email_exists' || created.error?.code === 'user_already_exists') {
+      const grant = await caller.rpc('lv_manage_workspace_access', { target, email_address: email, access_role: role });
+      return grant.error
+        ? json(409, { error: 'This account already exists. Check that its email is confirmed and that its membership can be changed.' })
+        : json(200, { existing: true });
+    }
     if (created.error || !created.data.user) {
-      return json(created.error?.code === 'email_exists' ? 409 : 502, {
-        error: created.error?.code === 'email_exists'
-          ? 'This account already exists. Use Personnel access to assign its role.'
-          : 'The account could not be created.',
-      });
+      return json(502, { error: 'The account could not be created.' });
     }
     const link = await admin.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo: callback.href } });
     if (link.error || !link.data.properties?.action_link) {

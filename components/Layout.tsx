@@ -51,6 +51,11 @@ const groups = [
   { label: 'EagleEye investigation', items: investigationItems },
 ];
 
+export type WorkspaceNavigationGroup = {
+  label: string;
+  items: { id: string; label: string; icon: typeof Map }[];
+};
+
 interface LayoutProps {
   children: React.ReactNode;
   user: User;
@@ -61,6 +66,7 @@ interface LayoutProps {
   rightPanel?: React.ReactNode;
   preview?: boolean;
   onOpenInvestigation?: (page: string) => void;
+  scopedWorkspace?: { name: string; groups: WorkspaceNavigationGroup[]; controls?: React.ReactNode };
 }
 
 const mobileItems = [
@@ -75,20 +81,21 @@ const time = new Intl.DateTimeFormat('en-GB', {
 });
 
 export const Layout: React.FC<LayoutProps> = ({
-  children, user, onLogout, currentPage, onNavigate, onNavigateToCase, rightPanel, preview = false, onOpenInvestigation,
+  children, user, onLogout, currentPage, onNavigate, onNavigateToCase, rightPanel, preview = false, onOpenInvestigation, scopedWorkspace,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [query, setQuery] = useState('');
   const commander = user.role === UserRole.CHIEF_COMMANDER;
-  const visibleGroups = groups
+  const visibleGroups = scopedWorkspace?.groups ?? groups
     .map(group => ({ ...group, items: group.items.filter(item => !('admin' in item && item.admin) || commander) }))
     .filter(group => group.items.length);
   const items = visibleGroups.flatMap(group => group.items);
   const active = currentPage === 'case_detail' ? 'cases' : currentPage === 'results' ? 'search' : currentPage;
   const heading = items.find(item => item.id === active)?.label ?? 'Workspace';
   const matches = query.trim() ? items.filter(item => (item.id === 'search' ? item.label + ' investigation' : item.label).toLowerCase().includes(query.trim().toLowerCase())) : [];
-  const workspace = preview ? 'Meridian Port' : 'Operations workspace';
+  const workspace = scopedWorkspace?.name ?? (preview ? 'Meridian Port' : 'Operations workspace');
+  const fieldItems = scopedWorkspace ? items.filter(item => ['command', 'cameras', 'records', 'history'].includes(item.id)) : mobileItems;
 
   function navigate(page: string) {
     setMobileOpen(false);
@@ -135,7 +142,7 @@ export const Layout: React.FC<LayoutProps> = ({
               {matches.length ? matches.map(item => <button key={item.id} type="button" onClick={() => navigate(item.id)}>{item.label}</button>) : <span>No matching pages</span>}
             </div>}
           </form>
-          {!preview && <NotificationBell userId={user.id} onNavigateToCase={onNavigateToCase} onNavigateToSurveillance={() => navigate('surveillance')} />}
+          {!preview && !scopedWorkspace && <NotificationBell userId={user.id} onNavigateToCase={onNavigateToCase} onNavigateToSurveillance={() => navigate('surveillance')} />}
           <span className="lunar-session"><i />{preview ? 'Design preview' : 'Session active'}</span>
           <time className="lunar-clock">{time.format(new Date())} WAT</time>
         </div>
@@ -152,6 +159,7 @@ export const Layout: React.FC<LayoutProps> = ({
           <span className="lunar-avatar">{preview ? 'M' : 'LV'}</span>
           <div><strong>{workspace}</strong><small>{preview ? 'DEMO WORKSPACE' : 'LUNAR VISION'}</small></div>
         </div>
+        {scopedWorkspace?.controls && <div className="lunar-scoped-controls">{scopedWorkspace.controls}</div>}
         <nav className="lunar-nav">
           {visibleGroups.map(group => <section key={group.label}>
             <h2>{group.label}</h2>
@@ -169,7 +177,7 @@ export const Layout: React.FC<LayoutProps> = ({
           <button className="lunar-icon" onClick={onLogout} aria-label={preview ? 'Exit preview' : 'End Session'} title={preview ? 'Exit preview' : 'End Session'}><LogOut size={16} /></button>
         </div>
         <div className="lunar-sidebar-controls">
-          {!preview && <button className="lunar-icon" onClick={exportCase} title="Export Case" aria-label="Export Case"><Save size={15} /></button>}
+          {!preview && !scopedWorkspace && <button className="lunar-icon" onClick={exportCase} title="Export Case" aria-label="Export Case"><Save size={15} /></button>}
           <button className="lunar-icon lunar-collapse" title="Toggle Panel" aria-expanded={!collapsed}
             aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setCollapsed(!collapsed)}>
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
@@ -182,7 +190,7 @@ export const Layout: React.FC<LayoutProps> = ({
         {rightPanel && <aside className="lunar-inspector" aria-label="Inspector">{rightPanel}</aside>}
       </main>
       <nav className="lunar-mobile-nav" aria-label="Field navigation">
-        {mobileItems.map(({ id, label, icon: Icon }) =>
+        {fieldItems.map(({ id, label, icon: Icon }) =>
           <button key={id} aria-current={active === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={19} />{label}</button>)}
       </nav>
     </div>

@@ -4,10 +4,11 @@ import { supabase } from '../services/supabase';
 
 type Observation = { id: string; source: 'file' | 'camera'; frame_seconds: number; summary: string; created_at: string };
 
-export default function WorkspaceOverview({ workspaceId, agency, navigate }: {
+export default function WorkspaceOverview({ workspaceId, agency, navigate, compact = false }: {
   workspaceId: string;
   agency: boolean;
   navigate: (panel: string) => void;
+  compact?: boolean;
 }) {
   const [data, setData] = useState<{ cameras: number | null; records: number | null; observations: number | null; recent: Observation[] | null }>();
   const [attempt, setAttempt] = useState(0);
@@ -49,7 +50,7 @@ export default function WorkspaceOverview({ workspaceId, agency, navigate }: {
         </button>
       ))}
     </div>
-    <section className="lv-card lv-console-observations">
+    {!compact && <section className="lv-card lv-console-observations">
       <h2>Recent video observations</h2>
       {data === undefined ? <p>Loading observations…</p> : data.recent === null ? <p role="alert">Observations could not be loaded. <button type="button" className="lv-secondary" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>
         : data.recent.length === 0 ? <p>Open Cameras, analyze a workspace feed or a local video, and save a frame with detections.</p>
@@ -57,6 +58,6 @@ export default function WorkspaceOverview({ workspaceId, agency, navigate }: {
             <p>{item.summary}</p>
             <small>{item.source === 'camera' ? 'Workspace camera' : 'Local video'} · Video time {item.frame_seconds}s · Saved {new Date(item.created_at).toLocaleString()}</small>
           </article>)}
-    </section>
+    </section>}
   </>;
 }

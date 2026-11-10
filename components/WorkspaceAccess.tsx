@@ -1,6 +1,5 @@
 import React, { FormEvent, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
-import AgencyAccountIssuer from './AgencyAccountIssuer';
 
 type Props = {
   workspace: { id: string; active: boolean; entitlement: string };
@@ -69,8 +68,6 @@ export default function WorkspaceAccess({ workspace, platform, role, onUpdated }
           <button disabled={busy}>Save agency configuration</button>
         </form>
       </>}
-      {platform && workspace.active && <AgencyAccountIssuer workspaceId={workspace.id}
-        onIssued={() => setVersion(previous => previous + 1)} />}
       <h2>Personnel access</h2>
       {workspace.active ? <form onSubmit={event => void submit(event, false)}>
         <label>Confirmed account email<input name="email" type="email" required /></label>

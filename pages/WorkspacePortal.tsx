@@ -7,7 +7,11 @@ import FaceComparison from '../components/FaceComparison';
 import WorkspaceOverview from '../components/WorkspaceOverview';
 import CorrectiveActions from '../components/CorrectiveActions';
 import AgencyCommandMap from '../components/AgencyCommandMap';
-import { Building2, Camera, ClipboardList, LayoutDashboard, LogOut, Map, ScanFace, Search, Shield, Users } from 'lucide-react';
+import AgencyAccountIssuer from '../components/AgencyAccountIssuer';
+import { Layout, type WorkspaceNavigationGroup } from '../components/Layout';
+import { UserRole } from '../types';
+import WorkspaceObservations from '../components/WorkspaceObservations';
+import { Activity, Building2, Camera, ClipboardList, KeyRound, LayoutDashboard, LogOut, Map, ScanFace, Search, Shield, UserPlus, Users } from 'lucide-react';
 
 type Workspace = { id: string; name: string; kind: 'business' | 'agency'; active: boolean; entitlement: string; organization_details: string };
 type RecordStatus = 'open' | 'in_review' | 'resolved';
@@ -18,12 +22,12 @@ const statusActions = { open: ['in_review'], in_review: ['open', 'resolved'], re
 const portalEnabled = workspaceEnabled && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED === 'true';
 const googleEnabled = import.meta.env.VITE_GOOGLE_SIGN_IN_ENABLED === 'true';
 const emailFlowsEnabled = import.meta.env.VITE_EMAIL_AUTH_FLOWS_ENABLED !== 'false';
-const panelIcons = { overview: LayoutDashboard, command: Map, cameras: Camera, records: ClipboardList, vehicles: Shield, faces: ScanFace, gallery: Search, access: Users };
+const panelIcons = { overview: LayoutDashboard, command: Map, cameras: Camera, records: ClipboardList, vehicles: Shield, faces: ScanFace, gallery: Search, access: Users, issue: UserPlus, password: KeyRound, history: Activity };
 
 export default function WorkspacePortal({ agency, platformView }: { agency: boolean; platformView: boolean }) {
   const kind = agency ? 'agency' : 'business';
   const signInPath = platformView ? '/agency/admin' : agency ? '/agency' : '/business';
-  const [panel, setPanel] = useState('overview');
+  const [panel, setPanel] = useState(agency && !platformView ? 'command' : 'overview');
   const [requestedCamera, setRequestedCamera] = useState<string>();
   const [account, setAccount] = useState<string | null>(null);
   const accountRef = useRef<string | null>(null);
@@ -76,7 +80,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
 
   useEffect(() => {
     setLoadedFor(null);
-    setPanel('overview');
+    setPanel(agency && !platformView ? 'command' : 'overview');
     if (!account) { setWorkspaces([]); setMemberships([]); setAdmin(false); setSelected(''); return; }
     void loadWorkspaces().catch(error => {
       if (accountRef.current === account) {
@@ -140,7 +144,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         setRecovering(false);
         setNotice('Password updated. Sign in with your new password.');
       })}>
-        <label>New password<input type="password" name="password" minLength={12} autoComplete="new-password" required /></label>
+        <label>New password<input type="password" name="password" minLength={platformView ? 16 : 12} autoComplete="new-password" required /></label>
         <button disabled={busy}>Update password</button>
       </form>
       {message}
@@ -185,11 +189,37 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     ...(isMember ? [['cameras', 'Cameras'], ['records', agency ? 'Investigations' : 'Sites & incidents']] : []),
     ...(isMember && agency ? [['vehicles', 'Vehicle watchlist']] : []),
     ...(isMember && agency ? [['faces', 'Face comparison'], ['gallery', 'Gallery search']] : []),
+    ...(isMember ? [['history', 'Detection history']] : []),
     ...(canManage ? [['access', agency ? 'Agency personnel' : 'Organization staff']] : []),
   ];
-  const visiblePanels = panels.filter(([id]) => !platformView || id === 'overview' || id === 'access');
+  const visiblePanels = platformView
+    ? [...(workspace ? [['overview', 'Overview'], ['issue', 'Issue account'], ['access', 'Agency personnel']] : []), ['password', 'Change password']]
+    : panels;
   const section = visiblePanels.find(([id]) => id === panel)?.[1] ?? 'Overview';
-  return <div className="lv-console">
+  const restoredAgency = agency && !platformView;
+  function navigate(id: string) {
+    if (id !== panel) setRequestedCamera(undefined);
+    setPanel(id);
+  }
+  const shellGroups: WorkspaceNavigationGroup[] = [
+    { label: 'Command', items: [
+      { id: 'command', label: 'Command centre', icon: Map },
+      { id: 'overview', label: 'Analytics', icon: LayoutDashboard },
+    ] },
+    { label: 'Monitor', items: [
+      { id: 'cameras', label: 'Live cameras & playback', icon: Camera },
+      { id: 'history', label: 'Detection history', icon: Activity },
+    ] },
+    { label: 'EagleEye investigation', items: [
+      { id: 'faces', label: 'Face comparison', icon: ScanFace },
+      { id: 'gallery', label: 'Face search', icon: Search },
+      { id: 'records', label: 'Investigations', icon: ClipboardList },
+      { id: 'vehicles', label: 'Vehicle intelligence', icon: Shield },
+    ] },
+    ...(canManage ? [{ label: 'Administer', items: [{ id: 'access', label: 'Access & audit', icon: Users }] }] : []),
+  ];
+  const content = <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
+    {!restoredAgency && <>
     <aside className="lv-console-rail">
       <div className="lv-console-brand"><img src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="148" />
         <span>{platformView ? 'Platform administration' : agency ? 'Agency operations' : 'Business operations'}</span></div>
@@ -198,7 +228,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           {workspaces.filter(item => platformView || memberships.some(member => member.workspace_id === item.id)).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </label>}
-      {workspace && (!platformView || admin) && <nav aria-label="Workspace navigation">
+      {(workspace && !platformView || platformView && loadedFor === account && admin) && <nav aria-label="Workspace navigation">
         {visiblePanels.map(([id, label]) => {
           const Icon = panelIcons[id as keyof typeof panelIcons];
           return <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} onClick={() => { if (id !== panel) setRequestedCamera(undefined); setPanel(id); }}><Icon size={17} aria-hidden="true" />{label}</button>;
@@ -209,6 +239,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         <button type="button" onClick={() => void supabase.auth.signOut().then(({ error }) => { if (error) setNotice(error.message); })}><LogOut size={16} aria-hidden="true" /> Sign out</button>
       </div>
     </aside>
+    </>}
     <main className="lv-portal lv-console-main">
     <header className="lv-console-heading"><div><p>{workspace?.name ?? (agency ? 'Agency workspace' : 'Organization workspace')}</p>
       <h1>{workspace ? section : platformView ? 'Agency administration' : agency ? 'Agency command workspace' : 'Business operations'}</h1></div>
@@ -216,16 +247,46 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     </header>
     {message}
     {loadedFor !== account ? <p>Loading workspace access…</p> : platformView && !admin ? <p>Platform administrator access is required.</p> : <>
-    {(!agency && !workspaces.length || platformView && admin) && <section className="lv-card">
+    {platformView && admin && panel === 'overview' && <div className="lv-console-metrics">
+      <section className="lv-card"><h2>Registered agencies</h2><strong>{workspaces.length}</strong></section>
+      <section className="lv-card"><h2>Active agencies</h2><strong>{workspaces.filter(item => item.active).length}</strong></section>
+      <section className="lv-card"><h2>Suspended agencies</h2><strong>{workspaces.filter(item => !item.active).length}</strong></section>
+    </div>}
+    {platformView && admin && panel === 'password' && <section className="lv-card">
+      <h2>Change your administrator password</h2>
+      <form onSubmit={event => submit(event, async fields => {
+        const password = String(fields.get('password'));
+        if (password.length < 16 || password !== fields.get('confirm')) throw new Error('Enter matching passwords with at least 16 characters.');
+        const { data, error: userError } = await supabase.auth.getUser();
+        if (userError || !data.user?.email || data.user.id !== account) throw new Error('Sign in again before changing your password.');
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email: data.user.email, password: String(fields.get('current')) });
+        if (signInError) throw new Error('The current password could not be verified.');
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+        const signedOut = await supabase.auth.signOut();
+        setNotice(signedOut.error ? 'Password changed. Sign out and sign in with your new password.' : 'Password changed. Sign in with your new password.');
+      })}>
+        <label>Current password<input type="password" name="current" autoComplete="current-password" required /></label>
+        <label>New password, at least 16 characters<input type="password" name="password" minLength={16} autoComplete="new-password" required /></label>
+        <label>Confirm new password<input type="password" name="confirm" minLength={16} autoComplete="new-password" required /></label>
+        <button disabled={busy}>Update password</button>
+      </form>
+    </section>}
+    {(!agency && !workspaces.length || platformView && admin && panel === 'overview') && <section className="lv-card">
       <h2>{agency ? 'Create an agency' : 'Set up your organization'}</h2>
       <form onSubmit={event => submit(event, async fields => {
-        const { error } = await supabase.rpc(agency ? 'lv_create_agency' : 'lv_create_business', { workspace_name: fields.get('name') });
+        const { data, error } = await supabase.rpc(agency ? 'lv_create_agency' : 'lv_create_business', { workspace_name: fields.get('name') });
         if (error) throw new Error(error.message);
         await loadWorkspaces();
+        if (platformView && typeof data === 'string') { setSelected(data); setPanel('issue'); }
       })}><label>Organization name<input name="name" required minLength={2} maxLength={100} /></label><button disabled={busy}>Create workspace</button></form>
     </section>}
     {agency && !platformView && !isMember && <p>Your account needs active membership in the selected agency.</p>}
     {workspace && <>
+      {platformView && admin && panel === 'issue' && <section className="lv-card">
+        {workspace.active ? <AgencyAccountIssuer key={workspace.id} workspaceId={workspace.id} agencyName={workspace.name} />
+          : <p>Reactivate {workspace.name} before issuing accounts.</p>}
+      </section>}
       {panel === 'overview' && isMember && !platformView && <WorkspaceOverview key={account + selected} workspaceId={selected} agency={agency} navigate={setPanel} />}
       {panel === 'overview' && <section className="lv-card"><h2>{workspace.name}</h2>
         <p>{workspace.active ? 'Active workspace' : 'Agency access suspended'}{workspace.entitlement && ' · ' + workspace.entitlement}</p>
@@ -241,13 +302,17 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         </form> : workspace.organization_details && <p>{workspace.organization_details}</p>)}
       </section>}
       {canManage && panel === 'access' && <WorkspaceAccess key={account + selected} workspace={workspace} platform={platformView && admin} role={membership?.role} onUpdated={loadWorkspaces} />}
-      {!platformView && isMember && agency && panel === 'command' && <AgencyCommandMap key={account + selected} workspaceId={selected}
-        canManageCameras={canManage || admin} openCamera={id => { setRequestedCamera(id); setPanel('cameras'); }} />}
+      {!platformView && isMember && agency && panel === 'command' && <>
+        <WorkspaceOverview key={account + selected + 'command'} workspaceId={selected} agency navigate={navigate} compact />
+        <AgencyCommandMap key={account + selected} workspaceId={selected}
+          canManageCameras={canManage || admin} openCamera={id => { setRequestedCamera(id); setPanel('cameras'); }} />
+      </>}
       {!platformView && isMember && panel === 'cameras' && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
         initialCameraId={requestedCamera} canAdd={canManage || admin} />}
       {!platformView && isMember && agency && panel === 'vehicles' && <VehicleWatchlist key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && agency && panel === 'faces' && <FaceComparison key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && agency && panel === 'gallery' && <FaceComparison key={account + selected + 'gallery'} workspaceId={selected} gallery />}
+      {!platformView && isMember && panel === 'history' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && panel === 'records' && <div className="lv-grid">
         <section className="lv-card"><h2>{agency ? 'Investigation register' : 'Site and incident records'}</h2>
           {recordScope !== account + selected ? <p>Loading records…</p> : recordsFailed ? (
@@ -290,4 +355,21 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     </>}
     </main>
   </div>;
+  if (!restoredAgency) return content;
+  return <Layout
+    user={{ id: account, username: 'Agency operator', role: canManage ? UserRole.CHIEF_COMMANDER : UserRole.OFFICER, createdAt: '' }}
+    currentPage={panel} onNavigate={navigate}
+    onLogout={() => void supabase.auth.signOut().then(({ error }) => { if (error) setNotice(error.message); })}
+    scopedWorkspace={{
+      name: workspace?.name ?? 'Agency workspace',
+      groups: isMember ? shellGroups : [],
+      controls: <>
+        {workspace && <label>Agency<select value={selected} onChange={event => {
+          setSelected(event.target.value); setPanel('command'); setRequestedCamera(undefined);
+        }}>{workspaces.filter(item => memberships.some(member => member.workspace_id === item.id))
+          .map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+        {admin && <a href="/agency/admin">Platform administration</a>}
+      </>,
+    }}
+  >{content}</Layout>;
 }
