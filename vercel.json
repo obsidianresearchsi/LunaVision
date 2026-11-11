@@ -3,6 +3,7 @@
   "installCommand": "npm ci --ignore-scripts",
   "buildCommand": "npm run build -- --mode vercel",
   "outputDirectory": "dist",
+  "trailingSlash": false,
   "rewrites": [
     { "source": "/agency", "destination": "/index.html" },
     { "source": "/agency/admin", "destination": "/index.html" },
