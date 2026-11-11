@@ -80,7 +80,8 @@ export const CameraControlCenter: React.FC<{
   initialCameraId?: string | null;
   onChanged?: () => void;
   onManageCameras?: () => void;
-}> = ({ workspaceId, agency = false, role = 'member', platformAdmin = false, initialCameraId = null, onChanged, onManageCameras }) => {
+  onRefreshAccess?: () => Promise<void>;
+}> = ({ workspaceId, agency = false, role = 'member', platformAdmin = false, initialCameraId = null, onChanged, onManageCameras, onRefreshAccess }) => {
   const canConfigure = roleCan(role, 'configure', platformAdmin);
   const [cameras, setCameras] = useState<CameraRecord[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
@@ -90,6 +91,7 @@ export const CameraControlCenter: React.FC<{
   const [loading, setLoading] = useState(true);
   const [inventoryAttempt, setInventoryAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [refreshingAccess, setRefreshingAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -327,9 +329,17 @@ export const CameraControlCenter: React.FC<{
         {error ? <p role="alert">{error}</p> : <p className="lv-muted">Add a camera first, then configure its detection settings, counting lines, zones and alerts.</p>}
         {!canConfigure && <p className="lv-muted">A workspace owner or administrator can register cameras for your organization.</p>}
         <div className="lv-filter-bar">
+          {!canConfigure && onRefreshAccess && <button type="button" className="lv-btn" disabled={refreshingAccess} onClick={async () => {
+            setRefreshingAccess(true);
+            setNotice(null);
+            try { await onRefreshAccess(); }
+            catch { setNotice('Access could not be refreshed. Check your connection and try again.'); }
+            finally { setRefreshingAccess(false); }
+          }}>{refreshingAccess ? 'Refreshing access…' : 'Refresh access'}</button>}
           {error && <button type="button" className="lv-btn" onClick={() => setInventoryAttempt(attempt => attempt + 1)}>Retry camera inventory</button>}
           {onManageCameras && <button type="button" className="lv-btn lv-btn-primary" onClick={onManageCameras}>{canConfigure ? 'Add camera' : 'View cameras'}</button>}
         </div>
+        {notice && <p role="status">{notice}</p>}
       </section>
     );
   }

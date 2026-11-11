@@ -47,4 +47,21 @@ describe('Camera registration navigation',()=>{
     await act(async()=>Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='Retry camera inventory')!.click());
     expect(host.textContent).toContain('No connected cameras yet');expect(host.querySelector('[role=alert]')).toBeNull();
   });
+  it('refreshes an agency member role after promotion and unlocks registration',async()=>{
+    function AgencyFlow(){
+      const [role,setRole]=React.useState('member');
+      const [page,setPage]=React.useState('settings');
+      return page==='settings'
+        ? <CameraControlCenter workspaceId="agency" agency role={role} onRefreshAccess={async()=>{setRole('admin');}} onManageCameras={()=>setPage('cameras')}/>
+        : <WorkspaceCameras workspaceId="agency" agency canAdd={role==='admin'} role={role}/>;
+    }
+    await act(async()=>root.render(<AgencyFlow/>));
+    expect(host.textContent).toContain('owner or administrator');
+    await act(async()=>Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='Refresh access')!.click());
+    expect(host.textContent).not.toContain('owner or administrator');
+    await act(async()=>Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='Add camera')!.click());
+    expect(host.querySelector('form[aria-label="Register a camera"]')).not.toBeNull();
+    const register=Array.from(host.querySelectorAll('button')).find(button=>button.textContent==='Register camera')!;
+    expect(register.disabled).toBe(false);
+  });
 });

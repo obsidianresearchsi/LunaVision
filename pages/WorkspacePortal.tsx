@@ -1145,6 +1145,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     platformAdmin={platformView && admin}
                     initialCameraId={requestedCamera}
                     onManageCameras={() => navigate('cameras')}
+                    onRefreshAccess={loadWorkspaces}
                   />
                 )}
                 {!platformView && isMember && panel === 'playback' && (
