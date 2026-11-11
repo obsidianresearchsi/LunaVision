@@ -595,6 +595,67 @@ describe('Video Intelligence UI Workflows', () => {
     }
   });
 
+  it('SubjectEnrollmentCenter completes dossier booking when Face++ FaceSet returns face_indexed=false fallback', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        face_token: 'ftok_fb_02',
+        faceset_outer_id: 'lv_wsag',
+        face_indexed: false,
+        index_warning: 'INTERNAL_ERROR',
+        quality_score: 88.5,
+      }),
+    ) as any;
+
+    mockFrom.mockImplementation(() => makeChain([]));
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_upsert_agency_subject') return Promise.resolve({ data: { id: 'sub-convict-2' }, error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    try {
+      const { default: SubjectEnrollmentCenter } = await import('./SubjectEnrollmentCenter');
+      await act(async () => {
+        root.render(<SubjectEnrollmentCenter workspaceId="ws-ag" role="investigator" initialTab="enroll" />);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      host.querySelector<HTMLInputElement>('input[name="full_name"]')!.value = 'Garba Danladi';
+      const mugshotInput = host.querySelector<HTMLInputElement>('input[name="mugshots"]')!;
+      const mugFile = new File([new Uint8Array(64).fill(5)], 'garba.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(mugshotInput, 'files', { value: [mugFile], configurable: true });
+      await act(async () => {
+        mugshotInput.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await act(async () => {
+        host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 8; i++) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_upsert_agency_subject',
+        expect.objectContaining({
+          target: 'ws-ag',
+          photos: [
+            expect.objectContaining({
+              face_token: 'ftok_fb_02',
+              face_indexed: false,
+            }),
+          ],
+        }),
+      );
+      expect(host.textContent).toContain('Direct comparison fallback active (INTERNAL_ERROR)');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('SubjectEnrollmentCenter explains permission requirements clearly when role is member', async () => {
     mockFrom.mockImplementation(() => makeChain([]));
     const { default: SubjectEnrollmentCenter } = await import('./SubjectEnrollmentCenter');

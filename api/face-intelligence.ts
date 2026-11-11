@@ -96,6 +96,254 @@ function classifyBand(confidence: number, thresholds: Record<string, number>): '
   return 'below_threshold';
 }
 
+type SubjectMatch = {
+  subject_id: string;
+  subject_code: string | null;
+  full_name: string;
+  aliases: string;
+  category: string;
+  threat_level: string;
+  offense_summary: string;
+  warrant_reference: string;
+  case_reference: string;
+  last_known_location: string;
+  status: string;
+  face_token: string;
+  confidence: number;
+  band: 'high' | 'medium' | 'investigative' | 'below_threshold';
+  photo_url: string | null;
+};
+
+function hasIndexingFailure(res: { ok: boolean; data: any }): boolean {
+  if (!res.ok) return true;
+  if (Number(res.data?.face_added ?? 0) < 1) return true;
+  return Array.isArray(res.data?.failure_detail) && res.data.failure_detail.length > 0;
+}
+
+async function indexFaceInAgencyFaceset(
+  baseUrl: string,
+  apiKey: string,
+  apiSecret: string,
+  outerId: string,
+  faceToken: string,
+): Promise<{ faceIndexed: boolean; indexWarning: string | null }> {
+  const addForm = new FormData();
+  addForm.set('api_key', apiKey);
+  addForm.set('api_secret', apiSecret);
+  addForm.set('outer_id', outerId);
+  addForm.set('face_tokens', faceToken);
+  const addRes = await callFacePP(baseUrl, '/faceset/addface', addForm);
+  if (!hasIndexingFailure(addRes)) {
+    return { faceIndexed: true, indexWarning: null };
+  }
+
+  // Face++ /faceset/addface intermittently returns INTERNAL_ERROR on US endpoints;
+  // /faceset/create with force_merge=1 appends tokens cleanly on existing FaceSets.
+  const mergeForm = new FormData();
+  mergeForm.set('api_key', apiKey);
+  mergeForm.set('api_secret', apiSecret);
+  mergeForm.set('outer_id', outerId);
+  mergeForm.set('display_name', outerId.slice(0, 40));
+  mergeForm.set('face_tokens', faceToken);
+  mergeForm.set('force_merge', '1');
+  const mergeRes = await callFacePP(baseUrl, '/faceset/create', mergeForm);
+  if (!hasIndexingFailure(mergeRes)) {
+    return { faceIndexed: true, indexWarning: null };
+  }
+
+  const warning =
+    mergeRes.data?.failure_detail?.[0]?.reason ||
+    addRes.data?.failure_detail?.[0]?.reason ||
+    mergeRes.data?.error_message ||
+    addRes.data?.error_message ||
+    'Provider FaceSet indexing unavailable; saved for direct compare fallback.';
+  return { faceIndexed: false, indexWarning: String(warning) };
+}
+
+async function signSubjectPhotoUrl(
+  client: any,
+  cache: Map<string, string | null>,
+  storagePath: string | null | undefined,
+): Promise<string | null> {
+  if (!storagePath) return null;
+  if (cache.has(storagePath)) return cache.get(storagePath) ?? null;
+  const { data: signed } = await client.storage.from('lv-subject-photos').createSignedUrl(storagePath, 600);
+  const url = signed?.signedUrl ? String(signed.signedUrl) : null;
+  cache.set(storagePath, url);
+  return url;
+}
+
+async function recordSubjectMatch(
+  matchesBySubject: Map<string, SubjectMatch>,
+  client: any,
+  signedUrlCache: Map<string, string | null>,
+  subject: any,
+  storagePath: string | null | undefined,
+  faceToken: string,
+  confidence: number,
+  thresholds: Record<string, number>,
+): Promise<void> {
+  const existing = matchesBySubject.get(subject.id);
+  if (existing && confidence <= existing.confidence) return;
+  const photoUrl = await signSubjectPhotoUrl(client, signedUrlCache, storagePath || subject.primary_photo_path);
+  matchesBySubject.set(subject.id, {
+    subject_id: subject.id,
+    subject_code: subject.subject_code,
+    full_name: subject.full_name,
+    aliases: subject.aliases,
+    category: subject.category,
+    threat_level: subject.threat_level,
+    offense_summary: subject.offense_summary,
+    warrant_reference: subject.warrant_reference,
+    case_reference: subject.case_reference,
+    last_known_location: subject.last_known_location,
+    status: subject.status,
+    face_token: faceToken,
+    confidence,
+    band: classifyBand(confidence, thresholds),
+    photo_url: photoUrl,
+  });
+}
+
+async function compareProbeWithCandidate(
+  baseUrl: string,
+  apiKey: string,
+  apiSecret: string,
+  client: any,
+  probeToken: string,
+  candidateFaceToken: string | null | undefined,
+  storagePath: string | null | undefined,
+): Promise<{ confidence: number; thresholds?: Record<string, number>; faceToken: string } | null> {
+  if (candidateFaceToken) {
+    const tokenForm = new FormData();
+    tokenForm.set('api_key', apiKey);
+    tokenForm.set('api_secret', apiSecret);
+    tokenForm.set('face_token1', probeToken);
+    tokenForm.set('face_token2', candidateFaceToken);
+    const tokenRes = await callFacePP(baseUrl, '/compare', tokenForm);
+    if (tokenRes.ok && typeof tokenRes.data?.confidence === 'number') {
+      return {
+        confidence: tokenRes.data.confidence,
+        thresholds: tokenRes.data.thresholds,
+        faceToken: candidateFaceToken,
+      };
+    }
+  }
+
+  // Fallback to private storage mugshot when an unindexed face_token expires (>72h) or is absent.
+  if (!storagePath || typeof client.storage.from('lv-subject-photos')?.download !== 'function') {
+    return null;
+  }
+  const { data: blob, error: dlErr } = await client.storage.from('lv-subject-photos').download(storagePath);
+  if (dlErr || !blob) return null;
+
+  const bytes = typeof blob.arrayBuffer === 'function' ? await blob.arrayBuffer() : blob;
+  const imageBlob = new Blob([bytes], { type: blob.type || 'image/jpeg' });
+  const fileForm = new FormData();
+  fileForm.set('api_key', apiKey);
+  fileForm.set('api_secret', apiSecret);
+  fileForm.set('face_token1', probeToken);
+  fileForm.set('image_file2', imageBlob, 'enrolled-subject.jpg');
+  const fileRes = await callFacePP(baseUrl, '/compare', fileForm);
+  if (!fileRes.ok || typeof fileRes.data?.confidence !== 'number') return null;
+
+  return {
+    confidence: fileRes.data.confidence,
+    thresholds: fileRes.data.thresholds,
+    faceToken: String(fileRes.data?.faces2?.[0]?.face_token || candidateFaceToken || ''),
+  };
+}
+
+async function fallbackCompareGallery(opts: {
+  baseUrl: string;
+  apiKey: string;
+  apiSecret: string;
+  client: any;
+  workspaceId: string;
+  probeToken: string;
+  matchesBySubject: Map<string, SubjectMatch>;
+  thresholds: Record<string, number>;
+  signedUrlCache: Map<string, string | null>;
+  startedAt: number;
+}): Promise<{ thresholds: Record<string, number>; comparedCount: number }> {
+  const { baseUrl, apiKey, apiSecret, client, workspaceId, probeToken, matchesBySubject, signedUrlCache, startedAt } = opts;
+  let thresholds = opts.thresholds;
+
+  const { data: subjectRows } = await client
+    .from('lv_agency_subjects')
+    .select(
+      'id,subject_code,full_name,aliases,category,threat_level,offense_summary,warrant_reference,case_reference,last_known_location,status,primary_photo_path,face_token,face_indexed',
+    )
+    .eq('workspace_id', workspaceId)
+    .eq('status', 'active')
+    .order('face_indexed', { ascending: true })
+    .order('updated_at', { ascending: false })
+    .limit(24);
+
+  const unmatchedSubjects = (Array.isArray(subjectRows) ? subjectRows : []).filter((s: any) => !matchesBySubject.has(s.id));
+  if (unmatchedSubjects.length === 0) return { thresholds, comparedCount: 0 };
+
+  const { data: extraPhotoRows } = await client
+    .from('lv_subject_photos')
+    .select('subject_id,face_token,storage_path,is_primary')
+    .eq('workspace_id', workspaceId)
+    .in(
+      'subject_id',
+      unmatchedSubjects.map((s: any) => s.id),
+    );
+
+  const photosBySubject = new Map<string, { face_token: string | null; storage_path: string | null }[]>();
+  for (const row of Array.isArray(extraPhotoRows) ? extraPhotoRows : []) {
+    const list = photosBySubject.get(row.subject_id) || [];
+    list.push({ face_token: row.face_token || null, storage_path: row.storage_path || null });
+    photosBySubject.set(row.subject_id, list);
+  }
+
+  // Prioritize checking each subject's primary photo before secondary angles within serverless budget.
+  const primaryPass: { subject: any; faceToken: string | null; storagePath: string | null }[] = [];
+  const secondaryPass: { subject: any; faceToken: string | null; storagePath: string | null }[] = [];
+  for (const subject of unmatchedSubjects) {
+    const extras = photosBySubject.get(subject.id) || [];
+    const primaryToken = subject.face_token || extras[0]?.face_token || null;
+    const primaryPath = subject.primary_photo_path || extras[0]?.storage_path || null;
+    if (primaryToken || primaryPath) {
+      primaryPass.push({ subject, faceToken: primaryToken, storagePath: primaryPath });
+    }
+    const alt = extras.find((p) => (p.face_token && p.face_token !== primaryToken) || (p.storage_path && p.storage_path !== primaryPath));
+    if (alt) {
+      secondaryPass.push({ subject, faceToken: alt.face_token, storagePath: alt.storage_path });
+    }
+  }
+
+  let comparedCount = 0;
+  for (const item of [...primaryPass, ...secondaryPass]) {
+    if (comparedCount >= 24 || Date.now() - startedAt > 7500) break;
+    if (matchesBySubject.has(item.subject.id) && (matchesBySubject.get(item.subject.id)?.confidence ?? 0) >= (thresholds['1e-5'] ?? 73.9)) {
+      continue;
+    }
+    comparedCount++;
+    const cmp = await compareProbeWithCandidate(baseUrl, apiKey, apiSecret, client, probeToken, item.faceToken, item.storagePath);
+    if (!cmp) continue;
+    if (cmp.thresholds) thresholds = cmp.thresholds;
+
+    const minCandidateScore = Math.max(50, (thresholds['1e-3'] ?? 62.3) - 12);
+    if (cmp.confidence < minCandidateScore) continue;
+
+    await recordSubjectMatch(
+      matchesBySubject,
+      client,
+      signedUrlCache,
+      item.subject,
+      item.storagePath,
+      cmp.faceToken,
+      cmp.confidence,
+      thresholds,
+    );
+  }
+
+  return { thresholds, comparedCount };
+}
+
 export async function POST(request: Request) {
   return handleFaceIntelligence(request, process.env);
 }
@@ -192,27 +440,14 @@ export async function handleFaceIntelligence(
       if (!faceToken) return json(422, { error: 'Face++ did not return a valid face token.' });
 
       await ensureAgencyFaceset(baseUrl, apiKey, apiSecret, outerId);
-
-      const addForm = new FormData();
-      addForm.set('api_key', apiKey);
-      addForm.set('api_secret', apiSecret);
-      addForm.set('outer_id', outerId);
-      addForm.set('face_tokens', faceToken);
-      const addRes = await callFacePP(baseUrl, '/faceset/addface', addForm);
-
-      if (!addRes.ok) {
-        const msg = String(addRes.data?.error_message || '');
-        return json(502, { error: `Could not add face to agency index: ${msg || 'Provider error'}` });
-      }
-      if (Number(addRes.data?.face_added ?? 0) < 1 && Array.isArray(addRes.data?.failure_detail) && addRes.data.failure_detail.length > 0) {
-        return json(422, { error: `Face could not be indexed: ${addRes.data.failure_detail[0]?.reason || 'Invalid token'}` });
-      }
+      const { faceIndexed, indexWarning } = await indexFaceInAgencyFaceset(baseUrl, apiKey, apiSecret, outerId, faceToken);
 
       const quality = Number(primary.attributes?.facequality?.value ?? 0);
       return json(200, {
         face_token: faceToken,
         faceset_outer_id: outerId,
-        face_indexed: true,
+        face_indexed: faceIndexed,
+        index_warning: indexWarning,
         face_count: faces.length,
         quality_score: Number.isFinite(quality) ? Number(quality.toFixed(1)) : null,
         telemetry: {
@@ -270,6 +505,8 @@ export async function handleFaceIntelligence(
         faces_in_probe: probeFaces.length,
       };
 
+      const searchStartedAt = Date.now();
+
       // 2. Ensure FaceSet exists & run 1:N /search
       await ensureAgencyFaceset(baseUrl, apiKey, apiSecret, outerId);
       const searchForm = new FormData();
@@ -288,34 +525,16 @@ export async function handleFaceIntelligence(
         if (searchRes.data?.thresholds) thresholds = searchRes.data.thresholds;
       } else {
         const msg = String(searchRes.data?.error_message || '');
-        // Empty FaceSet is normal when an agency has not yet enrolled any subjects
-        if (!msg.includes('EMPTY') && !msg.includes('INVALID_OUTER_ID')) {
+        // Empty/unindexed FaceSets are expected when relying on direct compare fallback
+        if (!msg.includes('EMPTY') && !msg.includes('INVALID_OUTER_ID') && !msg.includes('INTERNAL_ERROR')) {
           return json(502, { error: `Face++ 1:N search failed: ${msg || 'Provider error'}` });
         }
       }
 
       // 3. Hydrate matched tokens against lv_agency_subjects & lv_subject_photos (respecting caller's RLS & clearance)
       const tokens = Array.from(new Set(candidates.map((c) => c.face_token).filter(Boolean)));
-      const matchesBySubject = new Map<
-        string,
-        {
-          subject_id: string;
-          subject_code: string | null;
-          full_name: string;
-          aliases: string;
-          category: string;
-          threat_level: string;
-          offense_summary: string;
-          warrant_reference: string;
-          case_reference: string;
-          last_known_location: string;
-          status: string;
-          face_token: string;
-          confidence: number;
-          band: 'high' | 'medium' | 'investigative' | 'below_threshold';
-          photo_url: string | null;
-        }
-      >();
+      const matchesBySubject = new Map<string, SubjectMatch>();
+      const signedUrlCache = new Map<string, string | null>();
 
       if (tokens.length > 0) {
         const [subRes, phRes] = await Promise.all([
@@ -372,37 +591,41 @@ export async function handleFaceIntelligence(
         for (const cand of candidates) {
           const entry = tokenToSubject.get(cand.face_token);
           if (!entry) continue;
-          const sub = entry.subject;
-          const band = classifyBand(cand.confidence, thresholds);
-          const existing = matchesBySubject.get(sub.id);
-          if (!existing || cand.confidence > existing.confidence) {
-            let signedUrl: string | null = null;
-            if (entry.path) {
-              const { data: signed } = await client.storage.from('lv-subject-photos').createSignedUrl(entry.path, 600);
-              if (signed?.signedUrl) signedUrl = signed.signedUrl;
-            }
-            matchesBySubject.set(sub.id, {
-              subject_id: sub.id,
-              subject_code: sub.subject_code,
-              full_name: sub.full_name,
-              aliases: sub.aliases,
-              category: sub.category,
-              threat_level: sub.threat_level,
-              offense_summary: sub.offense_summary,
-              warrant_reference: sub.warrant_reference,
-              case_reference: sub.case_reference,
-              last_known_location: sub.last_known_location,
-              status: sub.status,
-              face_token: cand.face_token,
-              confidence: cand.confidence,
-              band,
-              photo_url: signedUrl,
-            });
-          }
+          await recordSubjectMatch(
+            matchesBySubject,
+            client,
+            signedUrlCache,
+            entry.subject,
+            entry.path,
+            cand.face_token,
+            cand.confidence,
+            thresholds,
+          );
         }
       }
 
-      const matches = Array.from(matchesBySubject.values()).sort((a, b) => b.confidence - a.confidence);
+      // Phase 2: Direct /compare fallback across active workspace subjects not yet matched in Phase 1
+      let fallbackCompared = 0;
+      if (matchesBySubject.size < 5) {
+        const fb = await fallbackCompareGallery({
+          baseUrl,
+          apiKey,
+          apiSecret,
+          client,
+          workspaceId,
+          probeToken,
+          matchesBySubject,
+          thresholds,
+          signedUrlCache,
+          startedAt: searchStartedAt,
+        });
+        thresholds = fb.thresholds;
+        fallbackCompared = fb.comparedCount;
+      }
+
+      const matches = Array.from(matchesBySubject.values())
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 10);
       const topConfidence = matches.length > 0 ? matches[0].confidence : candidates[0]?.confidence ?? null;
 
       // 4. Write immutable search log via lv_log_face_search RPC
@@ -430,6 +653,7 @@ export async function handleFaceIntelligence(
         thresholds,
         telemetry: probeTelemetry,
         matches,
+        fallback_compared: fallbackCompared,
         unlinked_candidates: Math.max(0, candidates.length - matches.length),
       });
     }

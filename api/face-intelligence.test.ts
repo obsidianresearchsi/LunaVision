@@ -1,10 +1,14 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockCreateClient, mockRpc, mockSignedUrl } = vi.hoisted(() => ({
+const { mockCreateClient, mockRpc, mockSignedUrl, mockDownload } = vi.hoisted(() => ({
   mockCreateClient: vi.fn(),
   mockRpc: vi.fn(),
   mockSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://signed.example/subject.jpg' }, error: null }),
+  mockDownload: vi.fn().mockResolvedValue({
+    data: new Blob([new Uint8Array(48).fill(7)], { type: 'image/jpeg' }),
+    error: null,
+  }),
 }));
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -60,16 +64,17 @@ function setupSupabaseMock({
     storage: {
       from: () => ({
         createSignedUrl: mockSignedUrl,
+        download: mockDownload,
       }),
     },
     from: (table: string) => ({
       select: () => {
+        const rows = table === 'lv_subject_photos' ? photos : subjects;
         const chain: any = {
           eq: () => chain,
-          in: () => {
-            const rows = table === 'lv_subject_photos' ? photos : subjects;
-            return Promise.resolve({ data: rows, error: null });
-          },
+          order: () => chain,
+          limit: () => Promise.resolve({ data: rows, error: null }),
+          in: () => Promise.resolve({ data: rows, error: null }),
           maybeSingle: () =>
             Promise.resolve({
               data:
@@ -286,6 +291,122 @@ describe('api/face-intelligence', () => {
     expect(allowed.status).toBe(200);
     expect(await allowed.json()).toEqual({ removed: true, face_removed: 1 });
     expect(String(fetchMock.mock.calls[0][0])).toBe('https://api-cn.faceplusplus.com/facepp/v3/faceset/removeface');
+  });
+
+  it('recovers from /faceset/addface INTERNAL_ERROR via force_merge and falls back gracefully if both fail', async () => {
+    setupSupabaseMock({ role: 'investigator' });
+    const fetchMergeSuccess = vi
+      .fn()
+      // 1. /detect
+      .mockResolvedValueOnce(Response.json({ faces: [{ face_token: 'ftok_merge', attributes: { facequality: { value: 88.2 } } }] }))
+      // 2. /faceset/getdetail
+      .mockResolvedValueOnce(Response.json({ faceset_token: 'fset_01', outer_id: OUTER_ID }))
+      // 3. /faceset/addface returns INTERNAL_ERROR
+      .mockResolvedValueOnce(Response.json({ face_added: 0, failure_detail: [{ reason: 'INTERNAL_ERROR', face_token: 'ftok_merge' }] }))
+      // 4. /faceset/create with force_merge=1 succeeds
+      .mockResolvedValueOnce(Response.json({ face_added: 1, face_count: 1, failure_detail: [] }));
+    globalThis.fetch = fetchMergeSuccess as any;
+
+    const res1 = await handleFaceIntelligence(
+      makeFormRequest('enroll_face', { photo: new File([new Uint8Array(64).fill(4)], 'mug1.jpg', { type: 'image/jpeg' }) }),
+      makeEnv(),
+    );
+    expect(res1.status).toBe(200);
+    expect(await res1.json()).toEqual(
+      expect.objectContaining({
+        face_token: 'ftok_merge',
+        face_indexed: true,
+        index_warning: null,
+      }),
+    );
+    expect((fetchMergeSuccess.mock.calls[3][1].body as FormData).get('force_merge')).toBe('1');
+
+    // When both /faceset/addface and force_merge return INTERNAL_ERROR, return 200 with face_indexed: false
+    const fetchBothFail = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ faces: [{ face_token: 'ftok_fb', attributes: { facequality: { value: 85.0 } } }] }))
+      .mockResolvedValueOnce(Response.json({ faceset_token: 'fset_01', outer_id: OUTER_ID }))
+      .mockResolvedValueOnce(Response.json({ face_added: 0, failure_detail: [{ reason: 'INTERNAL_ERROR' }] }))
+      .mockResolvedValueOnce(Response.json({ face_added: 0, failure_detail: [{ reason: 'INTERNAL_ERROR' }] }));
+    globalThis.fetch = fetchBothFail as any;
+
+    const res2 = await handleFaceIntelligence(
+      makeFormRequest('enroll_face', { photo: new File([new Uint8Array(64).fill(6)], 'mug2.jpg', { type: 'image/jpeg' }) }),
+      makeEnv(),
+    );
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toEqual(
+      expect.objectContaining({
+        face_token: 'ftok_fb',
+        face_indexed: false,
+        index_warning: 'INTERNAL_ERROR',
+      }),
+    );
+  });
+
+  it('uses direct /compare fallback (including storage image download on INVALID_FACE_TOKEN) when 1:N /search returns empty', async () => {
+    setupSupabaseMock({
+      role: 'investigator',
+      subjects: [
+        {
+          id: 'sub-unindexed',
+          subject_code: 'AFIS-2026-99A',
+          full_name: 'Musa Ibrahim',
+          aliases: '',
+          category: 'wanted',
+          threat_level: 'high',
+          offense_summary: 'Interpol border alert',
+          warrant_reference: 'WR-77',
+          case_reference: 'CR-77',
+          last_known_location: 'Kano',
+          status: 'active',
+          primary_photo_path: `${WORKSPACE_ID}/subjects/musa.jpg`,
+          face_token: 'expired_tok_old',
+          face_indexed: false,
+        },
+      ],
+      photos: [],
+    });
+
+    const fetchFallback = vi
+      .fn()
+      // 1. /detect probe
+      .mockResolvedValueOnce(Response.json({ faces: [{ face_token: 'probe_200', attributes: { facequality: { value: 90.1 } } }] }))
+      // 2. /faceset/getdetail
+      .mockResolvedValueOnce(Response.json({ faceset_token: 'fset_01', outer_id: OUTER_ID }))
+      // 3. /search returns empty results
+      .mockResolvedValueOnce(Response.json({ results: [] }))
+      // 4. /compare with expired face_token2 fails with INVALID_FACE_TOKEN
+      .mockResolvedValueOnce(Response.json({ error_message: 'INVALID_FACE_TOKEN' }, { status: 400 }))
+      // 5. /compare retries by downloading private storage image_file2 and matches!
+      .mockResolvedValueOnce(
+        Response.json({
+          confidence: 94.4,
+          thresholds: { '1e-3': 62.3, '1e-4': 69.1, '1e-5': 73.9 },
+          faces2: [{ face_token: 'refreshed_tok_musa' }],
+        }),
+      );
+    globalThis.fetch = fetchFallback as any;
+
+    const req = makeFormRequest('search_database', {
+      photo: new File([new Uint8Array(64).fill(8)], 'probe-gate.jpg', { type: 'image/jpeg' }),
+    });
+    const res = await handleFaceIntelligence(req, makeEnv());
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(mockDownload).toHaveBeenCalledWith(`${WORKSPACE_ID}/subjects/musa.jpg`);
+    expect(body.fallback_compared).toBe(1);
+    expect(body.matches).toHaveLength(1);
+    expect(body.matches[0]).toEqual(
+      expect.objectContaining({
+        subject_id: 'sub-unindexed',
+        full_name: 'Musa Ibrahim',
+        confidence: 94.4,
+        band: 'high',
+        face_token: 'refreshed_tok_musa',
+      }),
+    );
   });
 });
 

@@ -99,15 +99,19 @@ async function compressPhotoForBiometrics(file: File): Promise<File> {
   return new File([finalBlob], `${safe}.jpg`, { type: 'image/jpeg' });
 }
 
+type EnrolledBiometricResponse = {
+  face_token: string;
+  faceset_outer_id: string;
+  face_indexed: boolean;
+  index_warning?: string | null;
+  quality_score: number | null;
+};
+
 async function enrollPhotoWithProvider(
   workspaceId: string,
   accessToken: string,
   preparedPhoto: File,
-): Promise<{
-  face_token: string;
-  faceset_outer_id: string;
-  quality_score: number | null;
-}> {
+): Promise<EnrolledBiometricResponse> {
   const form = new FormData();
   form.set('action', 'enroll_face');
   form.set('photo', preparedPhoto);
@@ -123,7 +127,11 @@ async function enrollPhotoWithProvider(
   if (!res.ok || !body?.face_token) {
     throw new Error(body?.error || 'Biometric face encoding failed.');
   }
-  return body;
+  return {
+    ...body,
+    face_indexed: body.face_indexed !== false,
+    index_warning: body.index_warning ?? null,
+  };
 }
 
 function normalizeLookupKey(s: string): string {
@@ -196,6 +204,8 @@ export default function SubjectEnrollmentCenter({
     subjectCode: string | null;
     faceToken: string | null;
     facesetOuterId: string | null;
+    faceIndexed: boolean;
+    indexWarning: string | null;
     qualityScore: number | null;
     angleCount: number;
   } | null>(null);
@@ -356,7 +366,7 @@ export default function SubjectEnrollmentCenter({
       if (!token) throw new Error('Sign in again before enrolling biometric subjects.');
 
       const uploadedPhotos: any[] = [];
-      let primaryBio: { face_token: string; faceset_outer_id: string; quality_score: number | null } | null = null;
+      let primaryBio: EnrolledBiometricResponse | null = null;
 
       for (let i = 0; i < anglePhotos.length; i++) {
         const item = anglePhotos[i];
@@ -374,7 +384,7 @@ export default function SubjectEnrollmentCenter({
         uploadedPhotos.push({
           storage_path: storagePath,
           face_token: bio.face_token,
-          face_indexed: true,
+          face_indexed: bio.face_indexed,
           angle_label: item.angle,
           quality_score: bio.quality_score,
           is_primary: i === 0,
@@ -427,18 +437,23 @@ export default function SubjectEnrollmentCenter({
         );
         setTab('directory');
       } else {
+        const allIndexed = uploadedPhotos.length > 0 && uploadedPhotos.every((p) => p.face_indexed !== false);
         setLastEnrolled({
           fullName,
           subjectCode: subjectCodeVal,
           faceToken: primaryBio?.face_token ?? null,
           facesetOuterId: primaryBio?.faceset_outer_id ?? null,
+          faceIndexed: allIndexed,
+          indexWarning: primaryBio?.index_warning ?? null,
           qualityScore: primaryBio?.quality_score ?? null,
           angleCount: uploadedPhotos.length,
         });
         setNotice(
-          uploadedPhotos.length > 0
-            ? `Subject "${fullName}" enrolled and registered on Face++ (${uploadedPhotos.length} biometric angle(s)). Ready for 1:N face search.`
-            : `Subject "${fullName}" metadata saved without Face++ vector.`,
+          uploadedPhotos.length === 0
+            ? `Subject "${fullName}" metadata saved without Face++ vector.`
+            : allIndexed
+              ? `Subject "${fullName}" enrolled and registered on Face++ (${uploadedPhotos.length} biometric angle(s)). Ready for 1:N face search.`
+              : `Subject "${fullName}" saved with Face++ biometric token & mugshot (FaceSet indexing degraded; searchable via direct comparison fallback).`,
         );
       }
       setRefreshTick((t) => t + 1);
@@ -603,7 +618,7 @@ export default function SubjectEnrollmentCenter({
             photosPayload.push({
               storage_path: storagePath,
               face_token: bio.face_token,
-              face_indexed: true,
+              face_indexed: bio.face_indexed,
               angle_label: 'frontal',
               quality_score: bio.quality_score,
               is_primary: true,
@@ -1002,6 +1017,10 @@ export default function SubjectEnrollmentCenter({
                             Face++ token: <code>{lastEnrolled.faceToken}</code>
                             {lastEnrolled.facesetOuterId && <> · FaceSet: <code>{lastEnrolled.facesetOuterId}</code></>}
                             {lastEnrolled.qualityScore !== null && <> · Quality: {lastEnrolled.qualityScore.toFixed(1)}%</>}
+                            {' · '}
+                            {lastEnrolled.faceIndexed
+                              ? 'FaceSet indexed'
+                              : `Direct comparison fallback active${lastEnrolled.indexWarning ? ` (${lastEnrolled.indexWarning})` : ''}`}
                           </>
                         ) : (
                           'Saved metadata only (no facial vector indexed).'
