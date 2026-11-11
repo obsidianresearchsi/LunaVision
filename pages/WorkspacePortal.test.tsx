@@ -236,6 +236,21 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     });
   }
 
+  it('opens camera registration directly from the business camera-settings empty state', async () => {
+    setupMockDb({
+      workspaces: [{id:'business-camera',name:'Business cameras',kind:'business',active:true,entitlement:'',organization_details:''}],
+      memberships: [{workspace_id:'business-camera',role:'owner'}],
+    });
+    await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false}/>);
+    const settings=Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(button=>button.textContent==='Camera intelligence')!;
+    await act(async()=>settings.click());
+    expect(host.textContent).toContain('No connected cameras yet');
+    const add=Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent==='Add camera')!;
+    await act(async()=>add.click());
+    expect(host.querySelector('form[aria-label="Register a camera"]')).not.toBeNull();
+    expect(host.querySelector('[name=name]')).not.toBeNull();
+  });
+
   it('renders Business Dashboard with Playback, Change password, record filtering, and status history', async () => {
     setupMockDb({
       workspaces: [{ id: 'biz-1', name: 'Meridian Logistics', kind: 'business', active: true, entitlement: 'Enterprise', organization_details: 'Apapa port terminal' }],
@@ -320,11 +335,13 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     expect(configBtn).toBeTruthy();
     expect(integrationsBtn).toBeTruthy();
 
-    // Open Enroll subject and verify live SubjectEnrollmentCenter renders
+    // Open Enroll subject and verify live police/convict biometric booking form renders immediately
     const enrollBtn = host.querySelector('button[aria-label="Enroll subject"]') as HTMLButtonElement;
     expect(enrollBtn).toBeTruthy();
     await act(async () => { enrollBtn.click(); });
     expect(host.textContent).toContain('Agency Subject Enrollment, Bulk Migration & Biometric Dossiers');
+    expect(host.textContent).toContain('Enroll New Biometric Subject / Convict Dossier');
+    expect(host.textContent).toContain('Enroll Convict / Subject & Register on Face++');
 
     // Open Search history and verify live search audit history renders
     const histBtn = host.querySelector('button[aria-label="Search history"]') as HTMLButtonElement;

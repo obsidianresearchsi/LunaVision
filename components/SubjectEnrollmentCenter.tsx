@@ -83,6 +83,12 @@ const ANGLE_OPTIONS = [
   { value: 'id_document', label: 'ID / Passport crop' },
 ];
 
+const NIGERIAN_CITY_HINTS = [
+  'Lagos', 'Ikeja', 'Apapa', 'Abuja', 'Port Harcourt', 'Kano', 'Ibadan',
+  'Kaduna', 'Benin City', 'Enugu', 'Jos', 'Ilorin', 'Maiduguri', 'Warri',
+  'Onitsha', 'Calabar', 'Owerri', 'Abeokuta',
+];
+
 async function compressPhotoForBiometrics(file: File): Promise<File> {
   if ((file.type === 'image/jpeg' || file.type === 'image/png') && file.size <= 1_200_000) {
     return file;
@@ -131,6 +137,7 @@ export default function SubjectEnrollmentCenter({
   initialTab = 'directory',
   enrollmentEnabled = true,
   searchEnabled = true,
+  onOpenFaceSearch,
 }: {
   workspaceId: string;
   role?: string;
@@ -138,6 +145,7 @@ export default function SubjectEnrollmentCenter({
   initialTab?: 'directory' | 'enroll' | 'migrate' | 'history';
   enrollmentEnabled?: boolean;
   searchEnabled?: boolean;
+  onOpenFaceSearch?: () => void;
 }) {
   const canWrite = roleCan(role, 'watchlist_write', platformAdmin) && enrollmentEnabled;
   const canArchive = roleCan(role, 'watchlist_archive', platformAdmin) && enrollmentEnabled;
@@ -161,9 +169,22 @@ export default function SubjectEnrollmentCenter({
   const [threatFilter, setThreatFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('active');
 
-  // Single enrollment state (multi-angle up to 5 photos)
+  // Single police/convict enrollment state (multi-angle up to 5 photos)
+  const [bookingMode, setBookingMode] = useState<'simple' | 'advanced'>('simple');
+  const [bookingStep, setBookingStep] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [allowMetadataOnly, setAllowMetadataOnly] = useState(false);
   const [anglePhotos, setAnglePhotos] = useState<{ file: File; angle: string }[]>([]);
+  const [primaryPreviewUrl, setPrimaryPreviewUrl] = useState<string | null>(null);
   const [editingSubject, setEditingSubject] = useState<AgencySubject | null>(null);
+  const [lastEnrolled, setLastEnrolled] = useState<{
+    fullName: string;
+    subjectCode: string | null;
+    faceToken: string | null;
+    facesetOuterId: string | null;
+    qualityScore: number | null;
+    angleCount: number;
+  } | null>(null);
+  const primaryInputRef = useRef<HTMLInputElement | null>(null);
 
   // Bulk migration state
   const [migSourceName, setMigSourceName] = useState('Agency Criminal Records Archive');
@@ -265,30 +286,71 @@ export default function SubjectEnrollmentCenter({
     };
   }, [workspaceId, enrollmentEnabled, searchEnabled, refreshTick]);
 
+  useEffect(() => {
+    return () => {
+      if (primaryPreviewUrl && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(primaryPreviewUrl);
+      }
+    };
+  }, [primaryPreviewUrl]);
+
+  function handleAngleFilesChange(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const selected = Array.from(files)
+      .filter((f) => f.type.startsWith('image/'))
+      .slice(0, 5);
+    if (selected.length === 0) return;
+    setAnglePhotos(selected.map((f, idx) => ({ file: f, angle: idx === 0 ? 'frontal' : 'surveillance_still' })));
+    if (typeof URL.createObjectURL === 'function') {
+      setPrimaryPreviewUrl(URL.createObjectURL(selected[0]));
+    }
+    setError('');
+  }
+
+  function clearSelectedMugshots() {
+    setAnglePhotos([]);
+    setPrimaryPreviewUrl(null);
+    if (primaryInputRef.current) primaryInputRef.current.value = '';
+  }
+
   async function handleSingleEnrollment(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canWrite) return;
     const form = e.currentTarget;
     const fields = new FormData(form);
     const fullName = String(fields.get('full_name') || '').trim();
+    const offenseSummary = String(fields.get('offense_summary') || '').trim();
     if (!fullName) {
       setError('Full name is required.');
       return;
     }
+    if (!editingSubject && anglePhotos.length === 0 && !allowMetadataOnly) {
+      setError('Upload a frontal mugshot / reference photograph so the subject is registered in Face++ for facial search.');
+      return;
+    }
 
     setBusy(true);
+    setBookingStep(anglePhotos.length > 0 ? 1 : 3);
     setError('');
     setNotice('');
+    setLastEnrolled(null);
+
     try {
       const { data: sessData } = await supabase.auth.getSession();
       const token = sessData.session?.access_token;
       if (!token) throw new Error('Sign in again before enrolling biometric subjects.');
 
       const uploadedPhotos: any[] = [];
+      let primaryBio: { face_token: string; faceset_outer_id: string; quality_score: number | null } | null = null;
+
       for (let i = 0; i < anglePhotos.length; i++) {
         const item = anglePhotos[i];
+        setBookingStep(1);
         const prepared = await compressPhotoForBiometrics(item.file);
         const bio = await enrollPhotoWithProvider(workspaceId, token, prepared);
+        if (i === 0) primaryBio = bio;
+
+        setBookingStep(2);
         const storagePath = `${workspaceId}/subjects/${crypto.randomUUID()}.jpg`;
         const { error: upErr } = await supabase.storage
           .from('lv-subject-photos')
@@ -304,14 +366,16 @@ export default function SubjectEnrollmentCenter({
         });
       }
 
+      setBookingStep(3);
+      const subjectCodeVal = String(fields.get('subject_code') || '').trim() || null;
       const entryPayload = {
         ...(editingSubject ? { id: editingSubject.id } : {}),
-        subject_code: String(fields.get('subject_code') || '').trim() || null,
+        subject_code: subjectCodeVal,
         full_name: fullName,
         aliases: String(fields.get('aliases') || '').trim(),
         category: String(fields.get('category') || 'suspect'),
         threat_level: String(fields.get('threat_level') || 'medium'),
-        offense_summary: String(fields.get('offense_summary') || '').trim(),
+        offense_summary: offenseSummary,
         warrant_reference: String(fields.get('warrant_reference') || '').trim(),
         case_reference: String(fields.get('case_reference') || '').trim(),
         national_id: String(fields.get('national_id') || '').trim(),
@@ -333,17 +397,37 @@ export default function SubjectEnrollmentCenter({
       });
       if (saveErr) throw new Error(saveErr.message);
 
+      setBookingStep(4);
       form.reset();
-      setAnglePhotos([]);
-      setEditingSubject(null);
-      setNotice(
-        uploadedPhotos.length > 0
-          ? `Subject "${fullName}" saved with ${uploadedPhotos.length} indexed Face++ biometric angle(s).`
-          : `Subject "${fullName}" dossier updated.`,
-      );
-      setTab('directory');
+      clearSelectedMugshots();
+      setAllowMetadataOnly(false);
+
+      if (editingSubject) {
+        setEditingSubject(null);
+        setNotice(
+          uploadedPhotos.length > 0
+            ? `Dossier "${fullName}" updated with ${uploadedPhotos.length} new Face++ angle(s).`
+            : `Dossier "${fullName}" updated.`,
+        );
+        setTab('directory');
+      } else {
+        setLastEnrolled({
+          fullName,
+          subjectCode: subjectCodeVal,
+          faceToken: primaryBio?.face_token ?? null,
+          facesetOuterId: primaryBio?.faceset_outer_id ?? null,
+          qualityScore: primaryBio?.quality_score ?? null,
+          angleCount: uploadedPhotos.length,
+        });
+        setNotice(
+          uploadedPhotos.length > 0
+            ? `Subject "${fullName}" enrolled and registered on Face++ (${uploadedPhotos.length} biometric angle(s)). Ready for 1:N face search.`
+            : `Subject "${fullName}" metadata saved without Face++ vector.`,
+        );
+      }
       setRefreshTick((t) => t + 1);
     } catch (err) {
+      setBookingStep(0);
       setError(err instanceof Error ? err.message : 'Subject enrollment failed.');
     } finally {
       setBusy(false);
@@ -680,30 +764,31 @@ export default function SubjectEnrollmentCenter({
           </p>
         </div>
         <div className="lv-video-actions">
+          <button
+            type="button"
+            className={tab === 'enroll' ? '' : 'lv-secondary'}
+            onClick={() => {
+              setEditingSubject(null);
+              clearSelectedMugshots();
+              setTab('enroll');
+            }}
+          >
+            + Enroll Subject
+          </button>
           <button type="button" className={tab === 'directory' ? '' : 'lv-secondary'} onClick={() => setTab('directory')}>
             Dossier Directory ({subjects.length})
           </button>
-          {canWrite && (
-            <button
-              type="button"
-              className={tab === 'enroll' ? '' : 'lv-secondary'}
-              onClick={() => {
-                setEditingSubject(null);
-                setAnglePhotos([]);
-                setTab('enroll');
-              }}
-            >
-              + Enroll Subject
-            </button>
-          )}
-          {canWrite && (
-            <button type="button" className={tab === 'migrate' ? '' : 'lv-secondary'} onClick={() => setTab('migrate')}>
-              Bulk Data &amp; Photo Migration
-            </button>
-          )}
+          <button type="button" className={tab === 'migrate' ? '' : 'lv-secondary'} onClick={() => setTab('migrate')}>
+            Bulk Data &amp; Photo Migration
+          </button>
           {searchEnabled && (
             <button type="button" className={tab === 'history' ? '' : 'lv-secondary'} onClick={() => setTab('history')}>
               Search Audit History ({history.length})
+            </button>
+          )}
+          {onOpenFaceSearch && (
+            <button type="button" className="lv-secondary" onClick={onOpenFaceSearch}>
+              Open 1:N Face Search
             </button>
           )}
         </div>
@@ -813,7 +898,9 @@ export default function SubjectEnrollmentCenter({
                         disabled={busy}
                         onClick={() => {
                           setEditingSubject(sub);
-                          setAnglePhotos([]);
+                          setBookingMode('advanced');
+                          clearSelectedMugshots();
+                          setLastEnrolled(null);
                           setTab('enroll');
                         }}
                       >
@@ -844,161 +931,374 @@ export default function SubjectEnrollmentCenter({
         </div>
       )}
 
-      {/* Tab 2: Single Subject & Multi-Angle Biometric Enrollment */}
-      {tab === 'enroll' && canWrite && (
+      {/* Tab 2: Police / Convict Single Subject & Multi-Angle Biometric Enrollment */}
+      {tab === 'enroll' && (
         <div className="lv-card" style={{ marginTop: '1rem', background: '#0c131b' }}>
-          <h3>{editingSubject ? `Edit Dossier: ${editingSubject.full_name}` : 'Enroll New Biometric Subject Dossier'}</h3>
-          <p>
-            Attach up to 5 reference photographs (frontal, left/right profiles, surveillance stills). Every uploaded image
-            is compressed and indexed into this agency's isolated Face++ FaceSet index.
-          </p>
-          <form onSubmit={handleSingleEnrollment} className="lv-form-grid">
-            <label>
-              Subject / Booking Code (optional unique key)
-              <input name="subject_code" defaultValue={editingSubject?.subject_code || ''} maxLength={80} placeholder="e.g. AFIS-2026-0842" />
-            </label>
-            <label>
-              Full Name *
-              <input name="full_name" defaultValue={editingSubject?.full_name || ''} maxLength={140} required />
-            </label>
-            <label>
-              Known Aliases
-              <input name="aliases" defaultValue={editingSubject?.aliases || ''} maxLength={300} />
-            </label>
-            <label>
-              Category
-              <select name="category" defaultValue={editingSubject?.category || 'suspect'}>
-                <option value="wanted">Wanted</option>
-                <option value="suspect">Suspect</option>
-                <option value="person_of_interest">Person of interest</option>
-                <option value="missing">Missing person</option>
-                <option value="authorized">Authorized VIP / Staff</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-            <label>
-              Threat Level
-              <select name="threat_level" defaultValue={editingSubject?.threat_level || 'medium'}>
-                <option value="critical">Critical</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label>
-              Dossier Status
-              <select name="status" defaultValue={editingSubject?.status || 'active'}>
-                <option value="active">Active (Searchable)</option>
-                <option value="resolved">Resolved</option>
-                <option value="archived">Archived</option>
-              </select>
-            </label>
-            <label>
-              Warrant Reference
-              <input name="warrant_reference" defaultValue={editingSubject?.warrant_reference || ''} maxLength={120} />
-            </label>
-            <label>
-              Case Reference
-              <input name="case_reference" defaultValue={editingSubject?.case_reference || ''} maxLength={120} />
-            </label>
-            <label>
-              National ID / NIN / Passport
-              <input name="national_id" defaultValue={editingSubject?.national_id || ''} maxLength={80} />
-            </label>
-            <label>
-              Date of Birth
-              <input name="date_of_birth" defaultValue={editingSubject?.date_of_birth || ''} maxLength={40} placeholder="YYYY-MM-DD" />
-            </label>
-            <label>
-              Gender
-              <input name="gender" defaultValue={editingSubject?.gender || ''} maxLength={40} />
-            </label>
-            <label>
-              Nationality
-              <input name="nationality" defaultValue={editingSubject?.nationality || ''} maxLength={80} />
-            </label>
-            <label>
-              Last Known Location
-              <input name="last_known_location" defaultValue={editingSubject?.last_known_location || ''} maxLength={240} />
-            </label>
-            <label>
-              Minimum Clearance Level (0-3)
-              <select name="minimum_clearance" defaultValue={String(editingSubject?.minimum_clearance ?? 0)}>
-                <option value="0">Level 0 (Standard)</option>
-                <option value="1">Level 1 (Restricted)</option>
-                <option value="2">Level 2 (Secret)</option>
-                <option value="3">Level 3 (Top Clearance)</option>
-              </select>
-            </label>
-            <label style={{ gridColumn: '1 / -1' }}>
-              Criminal Charges / Offense Summary
-              <textarea name="offense_summary" defaultValue={editingSubject?.offense_summary || ''} maxLength={2000} rows={2} />
-            </label>
-            <label style={{ gridColumn: '1 / -1' }}>
-              Physical Marks / Identifying Traits
-              <input name="physical_marks" defaultValue={editingSubject?.physical_marks || ''} maxLength={1000} />
-            </label>
-            <label style={{ gridColumn: '1 / -1' }}>
-              Operational Notes
-              <textarea name="notes" defaultValue={editingSubject?.notes || ''} maxLength={4000} rows={2} />
-            </label>
-
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label>
-                Add Reference Biometric Photo(s) (JPEG, PNG, WebP — up to 5 angles)
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  multiple
-                  onChange={(e) => {
-                    const selected = Array.from(e.target.files || []).slice(0, 5);
-                    setAnglePhotos(selected.map((f, idx) => ({ file: f, angle: idx === 0 ? 'frontal' : 'surveillance_still' })));
-                  }}
-                />
-              </label>
-              {anglePhotos.map((ap, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.4rem' }}>
-                  <span>{ap.file.name}</span>
-                  <select
-                    value={ap.angle}
-                    onChange={(e) =>
-                      setAnglePhotos((prev) =>
-                        prev.map((item, j) => (j === idx ? { ...item, angle: e.target.value } : item)),
-                      )
-                    }
-                    style={{ maxWidth: '210px' }}
-                  >
-                    {ANGLE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <div>
+              <h3 style={{ margin: 0 }}>
+                {editingSubject ? `Edit Dossier: ${editingSubject.full_name}` : 'Enroll New Biometric Subject / Convict Dossier'}
+              </h3>
+              <small style={{ color: '#94a3b8' }}>
+                Registers criminal dossier + high-res facial vector directly on Face++ inside this agency's isolated FaceSet for 1:N search.
+              </small>
             </div>
-
-            <div className="lv-video-actions" style={{ gridColumn: '1 / -1' }}>
-              <button type="submit" disabled={busy}>
-                {busy ? 'Encoding & indexing Face++ vector…' : editingSubject ? 'Save dossier & new angles' : 'Enroll subject into database'}
+            <div className="lv-video-actions">
+              <button
+                type="button"
+                className={bookingMode === 'simple' ? '' : 'lv-secondary'}
+                onClick={() => setBookingMode('simple')}
+              >
+                Simple Booking Form
               </button>
-              {editingSubject && (
-                <button type="button" className="lv-secondary" onClick={() => setEditingSubject(null)}>
-                  Cancel edit
-                </button>
-              )}
+              <button
+                type="button"
+                className={bookingMode === 'advanced' ? '' : 'lv-secondary'}
+                onClick={() => setBookingMode('advanced')}
+              >
+                Full Criminal Dossier
+              </button>
             </div>
-          </form>
+          </div>
+
+          {!canWrite ? (
+            <p role="alert" className="lv-notice">
+              {!enrollmentEnabled
+                ? 'Biometric subject enrollment is currently disabled for this organization. Enable biometric_enrollment under Agency personnel & features.'
+                : `Your current account role ("${role}") cannot enroll biometric subjects. Ask an agency Owner or Administrator to grant Investigator, Supervisor, or Admin access under Agency personnel.`}
+            </p>
+          ) : (
+            <>
+              {lastEnrolled && (
+                <div
+                  role="status"
+                  className="lv-card"
+                  style={{ marginBottom: '1rem', background: '#0b2229', borderColor: '#2dd4bf' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <div>
+                      <strong>Enrolled on Face++ &amp; Dossier Database: {lastEnrolled.fullName}</strong>
+                      {lastEnrolled.subjectCode && <span className="lv-badge" style={{ marginLeft: '0.5rem' }}>{lastEnrolled.subjectCode}</span>}
+                      <div style={{ fontSize: '0.84rem', marginTop: '0.25rem', color: '#cbd5e1' }}>
+                        {lastEnrolled.faceToken ? (
+                          <>
+                            Face++ token: <code>{lastEnrolled.faceToken}</code>
+                            {lastEnrolled.facesetOuterId && <> · FaceSet: <code>{lastEnrolled.facesetOuterId}</code></>}
+                            {lastEnrolled.qualityScore !== null && <> · Quality: {lastEnrolled.qualityScore.toFixed(1)}%</>}
+                          </>
+                        ) : (
+                          'Saved metadata only (no facial vector indexed).'
+                        )}
+                      </div>
+                    </div>
+                    <div className="lv-video-actions">
+                      {onOpenFaceSearch && (
+                        <button type="button" onClick={onOpenFaceSearch}>
+                          Search in 1:N Face Search
+                        </button>
+                      )}
+                      <button type="button" className="lv-secondary" onClick={() => setTab('directory')}>
+                        View Directory ({subjects.length})
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <form
+                onSubmit={handleSingleEnrollment}
+                style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '1.25rem', alignItems: 'start' }}
+              >
+                {/* Left Column: Biometric Mugshot Card & Face++ Pipeline */}
+                <div className="lv-card" style={{ background: '#091017', border: '1px solid #243547' }}>
+                  <h4 style={{ marginTop: 0 }}>Biometric Mugshot &amp; Angles (Face++)</h4>
+                  <div
+                    onClick={() => primaryInputRef.current?.click()}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        primaryInputRef.current?.click();
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      maxWidth: '280px',
+                      aspectRatio: '1 / 1',
+                      border: '2px dashed #35516d',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden',
+                      cursor: 'pointer',
+                      marginBottom: '0.75rem',
+                      background: '#060b10',
+                    }}
+                  >
+                    {primaryPreviewUrl ? (
+                      <img
+                        src={primaryPreviewUrl}
+                        alt="Selected subject mugshot preview"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div style={{ textAlign: 'center', padding: '1rem', color: '#94a3b8' }}>
+                        <strong style={{ display: 'block', color: '#e2e8f0' }}>Click to Upload Mugshot</strong>
+                        <small>Frontal face JPEG, PNG, or WebP (up to 5 angles)</small>
+                      </div>
+                    )}
+                  </div>
+
+                  <label>
+                    Select Reference Biometric Photo(s) (1 frontal required for Face++ search, max 5 angles)
+                    <input
+                      ref={primaryInputRef}
+                      name="mugshots"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      disabled={busy}
+                      onChange={(e) => handleAngleFilesChange(e.target.files)}
+                    />
+                  </label>
+
+                  {anglePhotos.length > 0 && (
+                    <div style={{ marginTop: '0.6rem' }}>
+                      {anglePhotos.map((ap, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.82rem', flex: 1, minWidth: '120px' }}>{ap.file.name}</span>
+                          <select
+                            value={ap.angle}
+                            disabled={busy}
+                            onChange={(e) =>
+                              setAnglePhotos((prev) =>
+                                prev.map((item, j) => (j === idx ? { ...item, angle: e.target.value } : item)),
+                              )
+                            }
+                            style={{ maxWidth: '180px' }}
+                          >
+                            {ANGLE_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="lv-secondary"
+                        style={{ marginTop: '0.5rem' }}
+                        disabled={busy}
+                        onClick={clearSelectedMugshots}
+                      >
+                        Remove selected photos
+                      </button>
+                    </div>
+                  )}
+
+                  {!editingSubject && (
+                    <label className="lv-auto-observations" style={{ marginTop: '0.75rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={allowMetadataOnly}
+                        disabled={busy}
+                        onChange={(e) => setAllowMetadataOnly(e.target.checked)}
+                      />
+                      <span>Save dossier metadata only without Face++ encoding (not searchable by face)</span>
+                    </label>
+                  )}
+
+                  <div style={{ marginTop: '0.9rem', fontSize: '0.8rem', borderTop: '1px solid #1e2d3d', paddingTop: '0.65rem' }}>
+                    <div style={{ color: bookingStep >= 1 ? '#76efd6' : '#64748b' }}>
+                      {bookingStep === 1 ? '⏳ ' : bookingStep > 1 ? '✓ ' : '1. '}Encode Facial Vector &amp; Index Face++ FaceSet
+                    </div>
+                    <div style={{ color: bookingStep >= 2 ? '#76efd6' : '#64748b', marginTop: '0.2rem' }}>
+                      {bookingStep === 2 ? '⏳ ' : bookingStep > 2 ? '✓ ' : '2. '}Upload Encrypted Mugshot to Agency Vault
+                    </div>
+                    <div style={{ color: bookingStep >= 3 ? '#76efd6' : '#64748b', marginTop: '0.2rem' }}>
+                      {bookingStep === 3 ? '⏳ ' : bookingStep > 3 ? '✓ ' : '3. '}Save Criminal / Convict Dossier in Supabase
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Column: Convict / Subject Booking Demographics */}
+                <div className="lv-form-grid">
+                  <label>
+                    Booking / Inmate / Subject Code
+                    <input
+                      name="subject_code"
+                      defaultValue={editingSubject?.subject_code || ''}
+                      maxLength={80}
+                      disabled={busy}
+                      placeholder="e.g. NPF-2026-0842 or AFIS-1042"
+                    />
+                  </label>
+                  <label>
+                    Full Name *
+                    <input
+                      name="full_name"
+                      defaultValue={editingSubject?.full_name || ''}
+                      maxLength={140}
+                      required
+                      disabled={busy}
+                      placeholder="SURNAME Firstname"
+                    />
+                  </label>
+                  <label style={{ gridColumn: '1 / -1' }}>
+                    Primary Offense / Criminal Charges *
+                    <textarea
+                      name="offense_summary"
+                      defaultValue={editingSubject?.offense_summary || ''}
+                      maxLength={2000}
+                      rows={2}
+                      required={!editingSubject}
+                      disabled={busy}
+                      placeholder="e.g. Armed robbery, convicted felony warrant, vehicle snatching"
+                    />
+                  </label>
+                  <label>
+                    Classification / Category
+                    <select name="category" defaultValue={editingSubject?.category || 'wanted'} disabled={busy}>
+                      <option value="wanted">Wanted Fugitive</option>
+                      <option value="suspect">Suspect / Convict / Arrested</option>
+                      <option value="person_of_interest">Person of interest</option>
+                      <option value="missing">Missing person</option>
+                      <option value="authorized">Authorized VIP / Staff</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    Threat / Risk Level
+                    <select name="threat_level" defaultValue={editingSubject?.threat_level || 'high'} disabled={busy}>
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </label>
+                  <label>
+                    Dossier Status
+                    <select name="status" defaultValue={editingSubject?.status || 'active'} disabled={busy}>
+                      <option value="active">Active (Searchable in Face++)</option>
+                      <option value="resolved">Resolved / In Custody</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </label>
+                  <label>
+                    Location / L.G.A / Custody Facility
+                    <input
+                      name="last_known_location"
+                      defaultValue={editingSubject?.last_known_location || ''}
+                      maxLength={240}
+                      list="lv-ng-cities"
+                      disabled={busy}
+                      placeholder="e.g. Lagos, Abuja, Kuje..."
+                    />
+                    <datalist id="lv-ng-cities">
+                      {NIGERIAN_CITY_HINTS.map((city) => (
+                        <option key={city} value={city} />
+                      ))}
+                    </datalist>
+                  </label>
+                  <label>
+                    National ID / NIN / Passport
+                    <input name="national_id" defaultValue={editingSubject?.national_id || ''} maxLength={80} disabled={busy} />
+                  </label>
+
+                  {(bookingMode === 'advanced' || Boolean(editingSubject)) && (
+                    <>
+                      <label>
+                        Known Aliases
+                        <input name="aliases" defaultValue={editingSubject?.aliases || ''} maxLength={300} disabled={busy} />
+                      </label>
+                      <label>
+                        Warrant Reference
+                        <input name="warrant_reference" defaultValue={editingSubject?.warrant_reference || ''} maxLength={120} disabled={busy} />
+                      </label>
+                      <label>
+                        Case Reference
+                        <input name="case_reference" defaultValue={editingSubject?.case_reference || ''} maxLength={120} disabled={busy} />
+                      </label>
+                      <label>
+                        Date of Birth
+                        <input name="date_of_birth" defaultValue={editingSubject?.date_of_birth || ''} maxLength={40} placeholder="YYYY-MM-DD" disabled={busy} />
+                      </label>
+                      <label>
+                        Gender
+                        <input name="gender" defaultValue={editingSubject?.gender || ''} maxLength={40} disabled={busy} />
+                      </label>
+                      <label>
+                        Nationality
+                        <input name="nationality" defaultValue={editingSubject?.nationality || ''} maxLength={80} disabled={busy} />
+                      </label>
+                      <label>
+                        Minimum Clearance Level (0-3)
+                        <select name="minimum_clearance" defaultValue={String(editingSubject?.minimum_clearance ?? 0)} disabled={busy}>
+                          <option value="0">Level 0 (Standard)</option>
+                          <option value="1">Level 1 (Restricted)</option>
+                          <option value="2">Level 2 (Secret)</option>
+                          <option value="3">Level 3 (Top Clearance)</option>
+                        </select>
+                      </label>
+                      <label style={{ gridColumn: '1 / -1' }}>
+                        Physical Marks / Distinguishing Traits
+                        <input name="physical_marks" defaultValue={editingSubject?.physical_marks || ''} maxLength={1000} disabled={busy} />
+                      </label>
+                      <label style={{ gridColumn: '1 / -1' }}>
+                        Operational / Sentence Notes
+                        <textarea name="notes" defaultValue={editingSubject?.notes || ''} maxLength={4000} rows={2} disabled={busy} />
+                      </label>
+                    </>
+                  )}
+
+                  <div className="lv-video-actions" style={{ gridColumn: '1 / -1' }}>
+                    <button type="submit" disabled={busy}>
+                      {busy
+                        ? 'Encoding & registering on Face++…'
+                        : editingSubject
+                          ? 'Save dossier & new angles'
+                          : 'Enroll Convict / Subject & Register on Face++'}
+                    </button>
+                    {editingSubject && (
+                      <button
+                        type="button"
+                        className="lv-secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          setEditingSubject(null);
+                          clearSelectedMugshots();
+                        }}
+                      >
+                        Cancel edit
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </form>
+            </>
+          )}
         </div>
       )}
 
       {/* Tab 3: High-Throughput Bulk Data & Photo Folder Migration */}
-      {tab === 'migrate' && canWrite && (
+      {tab === 'migrate' && (
         <div className="lv-card" style={{ marginTop: '1rem', background: '#0c131b' }}>
           <h3>Bulk Criminal Data, Dossier &amp; Face Photo Migration Pipeline</h3>
-          <p>
-            Migrate large archives of criminal data and subject photographs directly into this agency's encrypted storage
-            and isolated Face++ FaceSet index. Automatically matches photos to spreadsheet rows by{' '}
+          {!canWrite ? (
+            <p role="alert" className="lv-notice">
+              {!enrollmentEnabled
+                ? 'Biometric enrollment and bulk migration are currently disabled for this organization.'
+                : `Your current account role ("${role}") cannot execute bulk biometric migrations. Ask an agency Administrator for Investigator, Supervisor, or Admin access.`}
+            </p>
+          ) : (
+            <>
+              <p>
+                Migrate large archives of criminal data and subject photographs directly into this agency's encrypted storage
+                and isolated Face++ FaceSet index. Automatically matches photos to spreadsheet rows by{' '}
             <code>photo_filename</code>, <code>subject_code</code>, <code>national_id</code>, or <code>full_name</code> — or
             drop a batch/folder of named photos directly without a spreadsheet.
           </p>
@@ -1195,6 +1495,8 @@ export default function SubjectEnrollmentCenter({
                 </table>
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
       )}

@@ -475,5 +475,118 @@ describe('Video Intelligence UI Workflows', () => {
       }),
     );
   });
+
+  it('SubjectEnrollmentCenter books a convict/subject dossier with mugshot into Face++ and shows face_token receipt', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        face_token: 'ftok_convict_901',
+        faceset_outer_id: 'lv_wsag',
+        face_indexed: true,
+        quality_score: 94.6,
+      }),
+    );
+    globalThis.fetch = fetchMock as any;
+
+    mockFrom.mockImplementation(() => makeChain([]));
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_upsert_agency_subject') return Promise.resolve({ data: { id: 'sub-convict-1' }, error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const onOpenFaceSearch = vi.fn();
+    try {
+      const { default: SubjectEnrollmentCenter } = await import('./SubjectEnrollmentCenter');
+      await act(async () => {
+        root.render(
+          <SubjectEnrollmentCenter
+            workspaceId="ws-ag"
+            role="investigator"
+            initialTab="enroll"
+            onOpenFaceSearch={onOpenFaceSearch}
+          />,
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const codeInput = host.querySelector<HTMLInputElement>('input[name="subject_code"]')!;
+      const nameInput = host.querySelector<HTMLInputElement>('input[name="full_name"]')!;
+      const offenseInput = host.querySelector<HTMLTextAreaElement>('textarea[name="offense_summary"]')!;
+      const locInput = host.querySelector<HTMLInputElement>('input[name="last_known_location"]')!;
+      codeInput.value = 'NPF-2026-901';
+      nameInput.value = 'Suleiman Bello';
+      offenseInput.value = 'Convicted armed hijacking & escape';
+      locInput.value = 'Lagos';
+
+      const mugshotInput = host.querySelector<HTMLInputElement>('input[name="mugshots"]')!;
+      const mugFile = new File([new Uint8Array(64).fill(9)], 'bello_frontal.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(mugshotInput, 'files', { value: [mugFile], configurable: true });
+      await act(async () => {
+        mugshotInput.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      const form = host.querySelector('form')!;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 8; i++) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/face-intelligence',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_upsert_agency_subject',
+        expect.objectContaining({
+          target: 'ws-ag',
+          entry: expect.objectContaining({
+            subject_code: 'NPF-2026-901',
+            full_name: 'Suleiman Bello',
+            offense_summary: 'Convicted armed hijacking & escape',
+            last_known_location: 'Lagos',
+          }),
+          photos: [
+            expect.objectContaining({
+              face_token: 'ftok_convict_901',
+              face_indexed: true,
+              angle_label: 'frontal',
+              is_primary: true,
+            }),
+          ],
+        }),
+      );
+      expect(host.textContent).toContain('Enrolled on Face++ & Dossier Database: Suleiman Bello');
+      expect(host.textContent).toContain('ftok_convict_901');
+
+      const searchBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.includes('Search in 1:N Face Search'),
+      )!;
+      expect(searchBtn).toBeTruthy();
+      await act(async () => {
+        searchBtn.click();
+      });
+      expect(onOpenFaceSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('SubjectEnrollmentCenter explains permission requirements clearly when role is member', async () => {
+    mockFrom.mockImplementation(() => makeChain([]));
+    const { default: SubjectEnrollmentCenter } = await import('./SubjectEnrollmentCenter');
+    await act(async () => {
+      root.render(<SubjectEnrollmentCenter workspaceId="ws-ag" role="member" initialTab="enroll" />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain('Your current account role ("member") cannot enroll biometric subjects.');
+  });
 });
 

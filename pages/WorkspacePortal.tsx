@@ -1144,6 +1144,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     role={membership?.role}
                     platformAdmin={platformView && admin}
                     initialCameraId={requestedCamera}
+                    onManageCameras={() => navigate('cameras')}
                   />
                 )}
                 {!platformView && isMember && panel === 'playback' && (
@@ -1235,9 +1236,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     workspaceId={selected}
                     role={membership?.role}
                     platformAdmin={platformView && admin}
-                    initialTab="directory"
+                    initialTab="enroll"
                     enrollmentEnabled={features.biometric_enrollment}
                     searchEnabled={features.face_search}
+                    onOpenFaceSearch={features.face_search ? () => navigate('gallery') : undefined}
                   />
                 )}
                 {!platformView && isMember && agency && panel === 'search_history' && (
@@ -1249,6 +1251,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     initialTab="history"
                     enrollmentEnabled={features.biometric_enrollment}
                     searchEnabled={features.face_search}
+                    onOpenFaceSearch={features.face_search ? () => navigate('gallery') : undefined}
                   />
                 )}
                 {!platformView && isMember && panel === 'history' && (

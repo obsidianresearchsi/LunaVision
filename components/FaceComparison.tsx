@@ -364,8 +364,8 @@ export default function FaceComparison({
               1-vs-6 Ad-Hoc Photo Gallery
             </button>
             {onOpenEnrollment && (
-              <button type="button" className="lv-secondary" onClick={onOpenEnrollment}>
-                Manage / Enroll Subjects
+              <button type="button" onClick={onOpenEnrollment}>
+                + Enroll Convict / Subject
               </button>
             )}
             {onOpenHistory && (
@@ -443,9 +443,14 @@ export default function FaceComparison({
               {dbMatches.length === 0 ? (
                 <div className="lv-card" style={{ background: '#0c131b' }}>
                   <p>
-                    No enrolled subjects in this workspace's FaceSet matched above Face++ return candidates. Ensure subjects
-                    are enrolled under <strong>Enroll subject / Migration</strong>.
+                    No enrolled subjects in this workspace's FaceSet matched above Face++ return candidates. Ensure
+                    convicts/subjects are enrolled and indexed on Face++ under <strong>Enroll subject</strong>.
                   </p>
+                  {onOpenEnrollment && (
+                    <button type="button" onClick={onOpenEnrollment}>
+                      + Enroll Subject into Face++ Index
+                    </button>
+                  )}
                 </div>
               ) : (
                 dbMatches.map((m) => (

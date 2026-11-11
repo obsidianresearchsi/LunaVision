@@ -79,7 +79,8 @@ export const CameraControlCenter: React.FC<{
   platformAdmin?: boolean;
   initialCameraId?: string | null;
   onChanged?: () => void;
-}> = ({ workspaceId, agency = false, role = 'member', platformAdmin = false, initialCameraId = null, onChanged }) => {
+  onManageCameras?: () => void;
+}> = ({ workspaceId, agency = false, role = 'member', platformAdmin = false, initialCameraId = null, onChanged, onManageCameras }) => {
   const canConfigure = roleCan(role, 'configure', platformAdmin);
   const [cameras, setCameras] = useState<CameraRecord[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
@@ -87,6 +88,7 @@ export const CameraControlCenter: React.FC<{
   const [settings, setSettings] = useState<CameraIntelSettings>(() => defaultCameraIntelSettings(agency));
   const [revision, setRevision] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [inventoryAttempt, setInventoryAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -137,11 +139,13 @@ export const CameraControlCenter: React.FC<{
       setSelectedCameraId(pick);
       setLoading(false);
     }
-    void loadCamerasAndFeatures();
+    void loadCamerasAndFeatures().catch(() => {
+      if (active) { setError('Camera inventory could not be loaded. Check your connection and retry.'); setLoading(false); }
+    });
     return () => {
       active = false;
     };
-  }, [workspaceId, agency, initialCameraId]);
+  }, [workspaceId, agency, initialCameraId, inventoryAttempt]);
 
   useEffect(() => {
     let active = true;
@@ -317,12 +321,15 @@ export const CameraControlCenter: React.FC<{
         <div className="lv-panel-head">
           <div>
             <p className="lv-eyebrow">Camera Intelligence & Control Center</p>
-            <h3>No connected cameras yet</h3>
+            <h3>{error ? 'Camera inventory could not be loaded' : 'No connected cameras yet'}</h3>
           </div>
         </div>
-        <p className="lv-muted">
-          Register at least one camera stream in the Cameras / Device Fleet section to configure per-camera detection capabilities, virtual counting lines, restricted zones, and alert thresholds.
-        </p>
+        {error ? <p role="alert">{error}</p> : <p className="lv-muted">Add a camera first, then configure its detection settings, counting lines, zones and alerts.</p>}
+        {!canConfigure && <p className="lv-muted">A workspace owner or administrator can register cameras for your organization.</p>}
+        <div className="lv-filter-bar">
+          {error && <button type="button" className="lv-btn" onClick={() => setInventoryAttempt(attempt => attempt + 1)}>Retry camera inventory</button>}
+          {onManageCameras && <button type="button" className="lv-btn lv-btn-primary" onClick={onManageCameras}>{canConfigure ? 'Add camera' : 'View cameras'}</button>}
+        </div>
       </section>
     );
   }
@@ -342,6 +349,7 @@ export const CameraControlCenter: React.FC<{
           </p>
         </div>
         <div className="lv-filter-bar">
+          {onManageCameras && <button type="button" className="lv-btn" onClick={onManageCameras}>Manage cameras</button>}
           <label className="lv-field" style={{ minWidth: '240px', marginBottom: 0 }}>
             <span>Select camera</span>
             <select

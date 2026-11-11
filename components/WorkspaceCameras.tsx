@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useState } from 'react';
+import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import VideoAnalysis from './VideoAnalysis';
 import CameraChat from './CameraChat';
@@ -49,6 +49,12 @@ export function WorkspaceCameras({
   const [inventoryAttempt, setInventoryAttempt] = useState(0);
   const [query, setQuery] = useState('');
   const [connectionMode, setConnectionMode] = useState('playback');
+  const registrationForm = useRef<HTMLFormElement>(null);
+  const registrationId = `camera-registration-${workspaceId}`;
+  function showRegistration() {
+    registrationForm.current?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    registrationForm.current?.querySelector<HTMLInputElement>('[name="name"]')?.focus({preventScroll: true});
+  }
   const canConfigure = roleCan(role, 'configure', platformAdmin);
   const filteredCameras = cameras.filter((camera) =>
     (camera.name + ' ' + camera.location).toLowerCase().includes(query.trim().toLowerCase()),
@@ -161,7 +167,10 @@ export function WorkspaceCameras({
 
   return (
     <section className="lv-card">
-      <h2>Cameras</h2>
+      <div className="lv-panel-head">
+        <div><h2>Cameras</h2><p>Register camera connections and open available feeds.</p></div>
+        {canAdd && <button type="button" className="lv-btn lv-btn-primary" aria-controls={registrationId} disabled={loading || saving} onClick={showRegistration}>Add camera</button>}
+      </div>
       {cameras.length > 0 && (
         <div className="lv-observation-filters">
           <label>
@@ -186,7 +195,7 @@ export function WorkspaceCameras({
           {loading
             ? 'Loading camera inventory…'
             : cameras.length === 0
-              ? 'No cameras registered.'
+              ? canAdd ? 'No cameras registered. Use Add camera to connect your first device.' : 'No cameras registered. Ask your workspace owner or administrator to add a camera.'
               : !filteredCameras.length
                 ? 'No cameras match this search.'
                 : 'Select a camera to open its feed or configure per-camera analytics and zones.'}
@@ -318,7 +327,8 @@ export function WorkspaceCameras({
         )}
       </details>
       {canAdd && (
-        <form onSubmit={add}>
+        <form id={registrationId} ref={registrationForm} onSubmit={add} aria-label="Register a camera">
+          <h3>Add a camera</h3>
           <label>Connection setup<select value={connectionMode} onChange={event=>setConnectionMode(event.target.value)}>
             <option value="playback">Browser-ready playback URL</option><option value="source">IP camera URL + encrypted credentials</option>
           </select></label>
@@ -340,7 +350,7 @@ export function WorkspaceCameras({
             HTTPS playback URL
             <input name="url" type="url" required maxLength={2048} />
           </label>}
-          <button disabled={saving || loading}>Add camera</button>
+          <button disabled={saving || loading}>{saving ? 'Saving camera…' : 'Register camera'}</button>
         </form>
       )}
     </section>
