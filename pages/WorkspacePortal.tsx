@@ -24,7 +24,40 @@ const statusActions = { open: ['in_review'], in_review: ['open', 'resolved'], re
 const portalEnabled = workspaceEnabled && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED === 'true';
 const googleEnabled = import.meta.env.VITE_GOOGLE_SIGN_IN_ENABLED === 'true';
 const emailFlowsEnabled = import.meta.env.VITE_EMAIL_AUTH_FLOWS_ENABLED !== 'false';
-const panelIcons = { overview: LayoutDashboard, command: Map, cameras: Camera, records: ClipboardList, vehicles: Shield, faces: ScanFace, gallery: Search, access: Users, issue: UserPlus, password: KeyRound, history: Activity };
+const panelIcons = { overview: LayoutDashboard, command: Map, cameras: Camera, playback: PlayCircle, records: ClipboardList, vehicles: Shield, faces: ScanFace, gallery: Search, access: Users, issue: UserPlus, password: KeyRound, history: Activity };
+
+function RecordActivity({ recordId, status }: { recordId: string; status: RecordStatus }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<{ id: number; previous_status: RecordStatus; next_status: RecordStatus; created_at: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setLoading(true);
+    setFailed(false);
+    void supabase.from('lv_record_activity').select('id,previous_status,next_status,created_at')
+      .eq('record_id', recordId).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(20)
+      .then(({ data, error }) => {
+        if (!active) return;
+        setFailed(Boolean(error));
+        setItems((data ?? []) as { id: number; previous_status: RecordStatus; next_status: RecordStatus; created_at: string }[]);
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, [open, recordId, status, attempt]);
+
+  return <details onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>Status history</summary>
+    {open && (loading ? <p>Loading status history…</p> : failed ? (
+      <p role="alert">Status history could not be loaded. <button type="button" className="lv-secondary" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>
+    ) : !items.length ? <p>No status transitions recorded yet.</p> : items.map(item => (
+      <p key={item.id}><small>{statusLabel[item.previous_status] ?? item.previous_status} → {statusLabel[item.next_status] ?? item.next_status} · {new Date(item.created_at).toLocaleString()}</small></p>
+    )))}
+  </details>;
+}
 
 export default function WorkspacePortal({ agency, platformView }: { agency: boolean; platformView: boolean }) {
   const kind = agency ? 'agency' : 'business';
@@ -47,6 +80,11 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const [recordScope, setRecordScope] = useState('');
   const [recordsFailed, setRecordsFailed] = useState(false);
   const [recordsAttempt, setRecordsAttempt] = useState(0);
+  const [recordQuery, setRecordQuery] = useState('');
+  const [recordStatusFilter, setRecordStatusFilter] = useState<'all' | RecordStatus>('all');
+  const [recordCategoryFilter, setRecordCategoryFilter] = useState<'all' | 'site' | 'incident'>('all');
+  const [agencyQuery, setAgencyQuery] = useState('');
+  const [agencyStatusFilter, setAgencyStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const workspace = loadedFor === account ? workspaces.find(item => item.id === selected) : undefined;
@@ -186,20 +224,31 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   </main>;
 
   const canManage = platformView && admin || membership?.role === 'owner' || membership?.role === 'admin';
+  const minPasswordLength = platformView ? 16 : 12;
   const panels = [
     ['overview', 'Overview'],
     ...(isMember && agency ? [['command', 'Command Center']] : []),
-    ...(isMember ? [['cameras', 'Cameras'], ['records', agency ? 'Investigations' : 'Sites & incidents']] : []),
+    ...(isMember ? [['cameras', 'Cameras'], ['playback', 'Playback'], ['records', agency ? 'Investigations' : 'Sites & incidents']] : []),
     ...(isMember && agency ? [['vehicles', 'Vehicle watchlist']] : []),
     ...(isMember && agency ? [['faces', 'Face comparison'], ['gallery', 'Gallery search']] : []),
     ...(isMember ? [['history', 'Detection history']] : []),
     ...(canManage ? [['access', agency ? 'Agency personnel' : 'Organization staff']] : []),
+    ['password', 'Change password'],
   ];
   const visiblePanels = platformView
     ? [...(workspace ? [['overview', 'Overview'], ['issue', 'Issue account'], ['access', 'Agency personnel']] : []), ['password', 'Change password']]
     : panels;
   const section = visiblePanels.find(([id]) => id === panel)?.[1] ?? 'Overview';
   const restoredAgency = agency && !platformView;
+  const filteredAgencies = workspaces.filter(item =>
+    (agencyStatusFilter === 'all' || (agencyStatusFilter === 'active' ? item.active : !item.active))
+    && (item.name + ' ' + item.entitlement).toLowerCase().includes(agencyQuery.trim().toLowerCase())
+  );
+  const filteredRecords = records.filter(record =>
+    (agency || recordCategoryFilter === 'all' || record.category === recordCategoryFilter)
+    && (recordStatusFilter === 'all' || record.category === 'site' && recordStatusFilter === 'open' ? recordStatusFilter === 'all' : record.status === recordStatusFilter)
+    && (record.title + ' ' + record.details).toLowerCase().includes(recordQuery.trim().toLowerCase())
+  );
   function navigate(id: string) {
     if (id === panel) return;
     pageHistory.current.push(panel);
@@ -228,6 +277,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       { id: 'fleet', label: 'Device fleet', icon: Camera },
       { id: 'rules', label: 'AI rules', icon: SlidersHorizontal },
       { id: 'overview', label: 'Analytics', icon: Activity },
+      { id: 'password', label: 'Change password', icon: KeyRound },
     ] },
     ...(canManage ? [{ label: 'Administer', items: [
       { id: 'access', label: 'Access & audit', icon: FileText },
@@ -244,7 +294,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         { id: 'officers', label: 'Officer management', icon: Users },
         { id: 'crawler', label: 'Web crawler', icon: Globe },
         { id: 'crawled_faces', label: 'Crawled faces', icon: Database },
-        { id: 'integrations', label: 'Configuration', icon: Settings },
+        { id: 'configuration', label: 'Configuration', icon: Settings },
       ] : []),
       { id: 'faces', label: 'Face comparison', icon: ScanFace },
     ] },
@@ -294,11 +344,11 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       <section className="lv-card"><h2>Active agencies</h2><strong>{workspaces.filter(item => item.active).length}</strong></section>
       <section className="lv-card"><h2>Suspended agencies</h2><strong>{workspaces.filter(item => !item.active).length}</strong></section>
     </div>}
-    {platformView && admin && panel === 'password' && <section className="lv-card">
-      <h2>Change your administrator password</h2>
+    {(!platformView || admin) && panel === 'password' && <section className="lv-card">
+      <h2>{platformView ? 'Change your administrator password' : 'Change your account password'}</h2>
       <form onSubmit={event => submit(event, async fields => {
         const password = String(fields.get('password'));
-        if (password.length < 16 || password !== fields.get('confirm')) throw new Error('Enter matching passwords with at least 16 characters.');
+        if (password.length < minPasswordLength || password !== fields.get('confirm')) throw new Error(`Enter matching passwords with at least ${minPasswordLength} characters.`);
         const { data, error: userError } = await supabase.auth.getUser();
         if (userError || !data.user?.email || data.user.id !== account) throw new Error('Sign in again before changing your password.');
         const { error: signInError } = await supabase.auth.signInWithPassword({ email: data.user.email, password: String(fields.get('current')) });
@@ -309,8 +359,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         setNotice(signedOut.error ? 'Password changed. Sign out and sign in with your new password.' : 'Password changed. Sign in with your new password.');
       })}>
         <label>Current password<input type="password" name="current" autoComplete="current-password" required /></label>
-        <label>New password, at least 16 characters<input type="password" name="password" minLength={16} autoComplete="new-password" required /></label>
-        <label>Confirm new password<input type="password" name="confirm" minLength={16} autoComplete="new-password" required /></label>
+        <label>New password, at least {minPasswordLength} characters<input type="password" name="password" minLength={minPasswordLength} autoComplete="new-password" required /></label>
+        <label>Confirm new password<input type="password" name="confirm" minLength={minPasswordLength} autoComplete="new-password" required /></label>
         <button disabled={busy}>Update password</button>
       </form>
     </section>}
@@ -322,6 +372,28 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         await loadWorkspaces();
         if (platformView && typeof data === 'string') { setSelected(data); setPanel('issue'); }
       })}><label>Organization name<input name="name" required minLength={2} maxLength={100} /></label><button disabled={busy}>Create workspace</button></form>
+    </section>}
+    {platformView && admin && panel === 'overview' && workspaces.length > 0 && <section className="lv-card">
+      <h2>Agency directory</h2>
+      <div className="lv-observation-filters">
+        <label>Search agencies<input value={agencyQuery} onChange={event => setAgencyQuery(event.target.value)} /></label>
+        <label>Agency status<select value={agencyStatusFilter} onChange={event => setAgencyStatusFilter(event.target.value as 'all' | 'active' | 'suspended')}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+        </select></label>
+      </div>
+      {!filteredAgencies.length ? <p>No agencies match these filters.</p> : filteredAgencies.map(item => <article key={item.id}>
+        <h3>{item.name}</h3>
+        <p>{item.active ? 'Active' : 'Suspended'}{item.entitlement ? ' · ' + item.entitlement : ''}</p>
+        <div className="lv-video-actions">
+          <button type="button" className="lv-secondary" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+            {selected === item.id ? 'Selected' : 'Select agency'}
+          </button>
+          <button type="button" className="lv-secondary" onClick={() => { setSelected(item.id); navigate('issue'); }}>Issue account</button>
+          <button type="button" className="lv-secondary" onClick={() => { setSelected(item.id); navigate('access'); }}>Agency personnel</button>
+        </div>
+      </article>)}
     </section>}
     {agency && !platformView && !isMember && <p>Your account needs active membership in the selected agency.</p>}
     {workspace && <>
@@ -353,10 +425,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         canManageCameras={canManage || admin} openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />}
       {!platformView && isMember && (panel === 'cameras' || !agency && panel === 'fleet') && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
         initialCameraId={requestedCamera} canAdd={canManage || admin} />}
-      {!platformView && isMember && agency && panel === 'playback' && <section className="lv-card"><VideoAnalysis workspaceId={selected} watchlistWorkspaceId={selected} samples /></section>}
-      {!platformView && isMember && agency && ['alerts', 'evidence', 'rules', 'fleet', 'integrations'].includes(panel) &&
+      {!platformView && isMember && panel === 'playback' && <section className="lv-card"><VideoAnalysis workspaceId={selected} watchlistWorkspaceId={agency ? selected : undefined} samples /></section>}
+      {!platformView && isMember && agency && ['alerts', 'evidence', 'rules', 'fleet', 'integrations', 'configuration'].includes(panel) &&
         <AgencyOperations key={account + selected + panel} workspaceId={selected}
-          mode={panel as 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations'} canManage={canManage}
+          mode={(panel === 'configuration' ? 'integrations' : panel) as 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations'} canManage={canManage}
           openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />}
       {!platformView && isMember && agency && pendingPages[panel] && <section className="lv-card">
         <h2>{pendingPages[panel].title}</h2><p role="status">{pendingPages[panel].detail}</p>
@@ -368,27 +440,44 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       {!platformView && isMember && panel === 'history' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && (panel === 'records' || !agency && panel === 'alerts') && <div className="lv-grid">
         <section className="lv-card"><h2>{agency ? 'Investigation register' : 'Site and incident records'}</h2>
+          <div className="lv-observation-filters">
+            <label>Search records<input value={recordQuery} onChange={event => setRecordQuery(event.target.value)} /></label>
+            {!agency && <label>Filter category<select value={recordCategoryFilter} onChange={event => setRecordCategoryFilter(event.target.value as 'all' | 'site' | 'incident')}>
+              <option value="all">All categories</option>
+              <option value="site">Site</option>
+              <option value="incident">Incident</option>
+            </select></label>}
+            <label>Status filter<select value={recordStatusFilter} onChange={event => setRecordStatusFilter(event.target.value as 'all' | RecordStatus)}>
+              <option value="all">All statuses</option>
+              <option value="open">Open</option>
+              <option value="in_review">In review</option>
+              <option value="resolved">Resolved</option>
+            </select></label>
+          </div>
           {recordScope !== account + selected ? <p>Loading records…</p> : recordsFailed ? (
             <p role="alert">Records could not be loaded. <button type="button" className="lv-secondary" onClick={() => setRecordsAttempt(attempt => attempt + 1)}>Retry records</button></p>
-          ) : !records.length && <p>No records in this workspace yet.</p>}
-          {recordScope === account + selected && records.map(record => <article key={record.id}>
+          ) : !records.length ? <p>No records in this workspace yet.</p> : !filteredRecords.length && <p>No records match these filters.</p>}
+          {recordScope === account + selected && filteredRecords.map(record => <article key={record.id}>
             <small>{record.category} · {new Date(record.created_at).toLocaleDateString()}</small>
             <h3>{record.title}</h3><p>{record.details}</p>
-            {record.category !== 'site' && <form onSubmit={event => submit(event, async fields => {
-              const { data, error } = await supabase.rpc('lv_change_record_status', {
-                target_id: record.id, expected_status: record.status, new_status: fields.get('status'),
-              });
-              if (error) throw new Error(error.message);
-              const updated = data as RecordRow;
-              setRecords(previous => previous.map(item => item.id === updated.id ? updated : item));
-            })}>
-              <label>{statusLabel[record.status]}
-                <select name="status" aria-label={'New status for ' + record.title}>
-                  {statusActions[record.status].map(status => <option key={status} value={status}>{statusLabel[status]}</option>)}
-                </select>
-              </label>
-              <button className="lv-secondary" disabled={busy}>Update status</button>
-            </form>}
+            {record.category !== 'site' && <>
+              <form onSubmit={event => submit(event, async fields => {
+                const { data, error } = await supabase.rpc('lv_change_record_status', {
+                  target_id: record.id, expected_status: record.status, new_status: fields.get('status'),
+                });
+                if (error) throw new Error(error.message);
+                const updated = data as RecordRow;
+                setRecords(previous => previous.map(item => item.id === updated.id ? updated : item));
+              })}>
+                <label>{statusLabel[record.status]}
+                  <select name="status" aria-label={'New status for ' + record.title}>
+                    {statusActions[record.status].map(status => <option key={status} value={status}>{statusLabel[status]}</option>)}
+                  </select>
+                </label>
+                <button className="lv-secondary" disabled={busy}>Update status</button>
+              </form>
+              <RecordActivity recordId={record.id} status={record.status} />
+            </>}
             {!agency && record.category === 'incident' && <CorrectiveActions incidentId={record.id} />}
           </article>)}
         </section>

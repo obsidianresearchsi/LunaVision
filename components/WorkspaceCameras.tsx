@@ -28,6 +28,10 @@ export function WorkspaceCameras({ workspaceId, canAdd, agency, initialCameraId 
   const [feedAttempt, setFeedAttempt] = useState(0);
   const [inventoryFailed, setInventoryFailed] = useState(false);
   const [inventoryAttempt, setInventoryAttempt] = useState(0);
+  const [query, setQuery] = useState('');
+  const filteredCameras = cameras.filter(camera =>
+    (camera.name + ' ' + camera.location).toLowerCase().includes(query.trim().toLowerCase())
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -78,10 +82,13 @@ export function WorkspaceCameras({ workspaceId, canAdd, agency, initialCameraId 
 
   return <section className="lv-card">
     <h2>Cameras</h2>
+    {cameras.length > 0 && <div className="lv-observation-filters">
+      <label>Search cameras<input value={query} onChange={event => setQuery(event.target.value)} /></label>
+    </div>}
     {inventoryFailed ? <p role="alert">Camera inventory could not be loaded. <button type="button" className="lv-secondary" onClick={() => setInventoryAttempt(attempt => attempt + 1)}>Retry inventory</button></p>
-      : <p>{loading ? 'Loading camera inventory…' : cameras.length === 0 ? 'No cameras registered.' : 'Select a camera to open its feed.'}</p>}
+      : <p>{loading ? 'Loading camera inventory…' : cameras.length === 0 ? 'No cameras registered.' : !filteredCameras.length ? 'No cameras match this search.' : 'Select a camera to open its feed.'}</p>}
     {notice && <p role="status">{notice}</p>}
-    {cameras.map(camera => <article key={camera.id}>
+    {filteredCameras.map(camera => <article key={camera.id}>
       <h3>{camera.name}</h3><p>{camera.location}</p>
       <button type="button" className="lv-secondary" onClick={() => {
         setPlayback('connecting');

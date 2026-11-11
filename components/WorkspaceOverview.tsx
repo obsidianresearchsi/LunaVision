@@ -37,7 +37,7 @@ export default function WorkspaceOverview({ workspaceId, agency, navigate, compa
   const metrics = [
     { title: 'Registered cameras', count: data?.cameras, icon: Camera, panel: 'cameras' },
     { title: agency ? 'Unresolved investigations' : 'Unresolved incidents', count: data?.records, icon: ClipboardList, panel: 'records' },
-    { title: 'Saved observations', count: data?.observations, icon: Radio, panel: 'cameras' },
+    { title: 'Saved observations', count: data?.observations, icon: Radio, panel: 'history' },
   ];
 
   return <>
