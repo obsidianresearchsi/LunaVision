@@ -12,6 +12,7 @@ import { Layout, type WorkspaceNavigationGroup } from '../components/Layout';
 import { UserRole } from '../types';
 import WorkspaceObservations from '../components/WorkspaceObservations';
 import VideoAnalysis from '../components/VideoAnalysis';
+import AgencyOperations from '../components/AgencyOperations';
 import { Activity, ArrowLeft, Bell, Building2, Camera, ClipboardList, Database, FileText, Globe, KeyRound, LayoutDashboard, LogOut, Map, PlayCircle, ScanFace, Search, Settings, Shield, SlidersHorizontal, UserPlus, Users } from 'lucide-react';
 
 type Workspace = { id: string; name: string; kind: 'business' | 'agency'; active: boolean; entitlement: string; organization_details: string };
@@ -249,12 +250,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     ] },
   ];
   const pendingPages: Record<string, { title: string; detail: string }> = {
-    rules: { title: 'AI rules', detail: 'Automated rules need the background camera event processor. You can run object detection and plate OCR in Playback now.' },
     enrollment: { title: 'Enroll subject', detail: 'Subject enrollment requires the agency-scoped biometric gallery and private image storage integration.' },
     search_history: { title: 'Search history', detail: 'Persisted face search history requires the biometric search integration. Saved object observations are available in Detection history.' },
     crawler: { title: 'Web crawler', detail: 'The crawler service requires agency-scoped job authorization and indexing before it can run in this workspace.' },
     crawled_faces: { title: 'Crawled faces', detail: 'Agency-scoped crawler indexing has not been connected.' },
-    integrations: { title: 'Integrations', detail: 'The operations map uses Mapbox. Cameras use registered HTTPS playback URLs. Face comparison requires server-side Face++ configuration, and automated alerts require a background event processor.' },
   };
   const content = <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
     {!restoredAgency && <>
@@ -352,10 +351,13 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       </>}
       {!platformView && isMember && agency && panel === 'intel' && <AgencyCommandMap key={account + selected} workspaceId={selected}
         canManageCameras={canManage || admin} openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />}
-      {!platformView && isMember && ['cameras', 'fleet'].includes(panel) && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
+      {!platformView && isMember && (panel === 'cameras' || !agency && panel === 'fleet') && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
         initialCameraId={requestedCamera} canAdd={canManage || admin} />}
       {!platformView && isMember && agency && panel === 'playback' && <section className="lv-card"><VideoAnalysis workspaceId={selected} watchlistWorkspaceId={selected} samples /></section>}
-      {!platformView && isMember && agency && panel === 'evidence' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
+      {!platformView && isMember && agency && ['alerts', 'evidence', 'rules', 'fleet', 'integrations'].includes(panel) &&
+        <AgencyOperations key={account + selected + panel} workspaceId={selected}
+          mode={panel as 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations'} canManage={canManage}
+          openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />}
       {!platformView && isMember && agency && pendingPages[panel] && <section className="lv-card">
         <h2>{pendingPages[panel].title}</h2><p role="status">{pendingPages[panel].detail}</p>
         <button type="button" onClick={() => navigate('playback')}>Open playback and analysis</button>
@@ -364,7 +366,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       {!platformView && isMember && agency && panel === 'faces' && <FaceComparison key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && agency && panel === 'gallery' && <FaceComparison key={account + selected + 'gallery'} workspaceId={selected} gallery />}
       {!platformView && isMember && panel === 'history' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
-      {!platformView && isMember && ['records', 'alerts'].includes(panel) && <div className="lv-grid">
+      {!platformView && isMember && (panel === 'records' || !agency && panel === 'alerts') && <div className="lv-grid">
         <section className="lv-card"><h2>{agency ? 'Investigation register' : 'Site and incident records'}</h2>
           {recordScope !== account + selected ? <p>Loading records…</p> : recordsFailed ? (
             <p role="alert">Records could not be loaded. <button type="button" className="lv-secondary" onClick={() => setRecordsAttempt(attempt => attempt + 1)}>Retry records</button></p>

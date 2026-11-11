@@ -140,6 +140,7 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
         source: observation.cameraId ? 'camera' : 'file',
         frame_seconds: frameSeconds.toFixed(2),
         summary,
+        detections: detections.map(item => ({ label: item.class, score: item.score })),
       });
       if (error) throw error;
       if (mounted.current) setObservationNotice('Observation saved. Find it in Workspace Overview.');
