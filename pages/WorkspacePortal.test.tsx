@@ -182,6 +182,29 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     mockRpc.mockResolvedValue({ data: [], error: null });
   }
 
+  it('finishes a confirmed business signup once and reuses an existing membership', async () => {
+    mockAuth.onAuthStateChange.mockImplementation((callback: any) => {
+      callback('SIGNED_IN', {user: {id: 'user-1', user_metadata: {business_signup_version: 1, organization_name: 'New customer'}}});
+      return {data: {subscription: {unsubscribe: vi.fn()}}};
+    });
+    setupMockDb({});
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === 'lv_create_business') {
+        setupMockDb({workspaces: [{id: 'created-biz', name: 'New customer', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'created-biz', role: 'owner'}]});
+        return {data: 'created-biz', error: null};
+      }
+      return {data: [], error: null};
+    });
+    const {default: WorkspacePortal} = await import('./WorkspacePortal');
+    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
+    expect(host.textContent).toContain('New customer');
+    expect(host.textContent).not.toContain('Set up your organization');
+    await act(async () => root.render(<div/>));
+    await act(async () => root.render(<WorkspacePortal agency={false} platformView={false}/>));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
+  });
+
   it('does not offer organization setup when workspace loading fails and restores access on retry', async () => {
     setupMockDb({});
     const normal = mockFrom.getMockImplementation()!;

@@ -1,5 +1,7 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase, workspaceEnabled } from '../services/supabase';
+import BusinessSignup from '../components/BusinessSignup';
+import { signupOrganization } from '../services/businessOnboarding';
 import { WorkspaceCameras } from '../components/WorkspaceCameras';
 import VehicleWatchlist from '../components/VehicleWatchlist';
 import WorkspaceAccess from '../components/WorkspaceAccess';
@@ -67,6 +69,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const [requestedCamera, setRequestedCamera] = useState<string>();
   const [account, setAccount] = useState<string | null>(null);
   const accountRef = useRef<string | null>(null);
+  const signupWorkspaceName = useRef<string | null>(null);
   const [workspaceLoadFailed, setWorkspaceLoadFailed] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [ready, setReady] = useState(!portalEnabled);
@@ -96,6 +99,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     if (!portalEnabled) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') setRecovering(true);
+      signupWorkspaceName.current = signupOrganization(session?.user.user_metadata);
       accountRef.current = session?.user.id ?? null;
       setAccount(accountRef.current);
       setReady(true);
@@ -105,13 +109,29 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
 
   async function loadWorkspaces() {
     const requestingAccount = accountRef.current;
-    const [teams, members, platform] = await Promise.all([
+    let [teams, members, platform] = await Promise.all([
       supabase.from('lv_workspaces').select('id,name,kind,active,entitlement,organization_details').eq('kind', kind).order('name'),
       supabase.from('lv_memberships').select('workspace_id,role,clearance,allowed_modules'),
       agency ? supabase.from('lv_platform_admins').select('user_id') : Promise.resolve({ data: [], error: null }),
     ]);
     if (requestingAccount !== accountRef.current) return;
     if (teams.error || members.error || platform.error) throw new Error('Workspace access could not be loaded.');
+    if (!agency && !platformView && signupWorkspaceName.current
+        && !teams.data.some(team => members.data.some(member => member.workspace_id === team.id))) {
+      const created = await supabase.rpc('lv_create_business', {workspace_name: signupWorkspaceName.current});
+      if (requestingAccount !== accountRef.current) return;
+      if (created.error) throw new Error('Your account is ready, but workspace setup could not finish. Please retry workspace access.');
+      [teams, members] = await Promise.all([
+        supabase.from('lv_workspaces').select('id,name,kind,active,entitlement,organization_details').eq('kind', kind).order('name'),
+        supabase.from('lv_memberships').select('workspace_id,role,clearance,allowed_modules'),
+      ]);
+      if (requestingAccount !== accountRef.current) return;
+      if (teams.error || members.error) throw new Error('Your workspace was created, but access could not be loaded. Please retry.');
+      if (!teams.data.some(team => members.data.some(member => member.workspace_id === team.id))) {
+        throw new Error('Your workspace is not accessible yet. Please retry workspace access or contact your administrator.');
+      }
+    }
+
     setWorkspaces(teams.data as Workspace[]);
     setMemberships(members.data);
     setAdmin(Boolean(platform.data?.length));
@@ -203,6 +223,11 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       {message}
     </section>
   </main>;
+
+  if (!account && !agency && register && !requestReset && ready && portalEnabled) {
+    return <BusinessSignup onSignIn={() => { setRegister(false); setNotice(''); }}
+      onGoogle={googleEnabled ? () => void signInWithGoogle() : undefined} notice={notice} externalBusy={busy}/>;
+  }
 
   if (!account) return <main className="lv-access">
     <section className="lv-card">
