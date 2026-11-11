@@ -130,6 +130,20 @@ function normalizeLookupKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+const BOOKING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generateBookingCode(): string {
+  const year = new Date().getFullYear();
+  const bytes = new Uint8Array(6);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  const suffix = Array.from(bytes, (b) => BOOKING_ALPHABET[b % BOOKING_ALPHABET.length]).join('');
+  return `AFIS-${year}-${suffix}`;
+}
+
 export default function SubjectEnrollmentCenter({
   workspaceId,
   role = 'member',
@@ -173,6 +187,7 @@ export default function SubjectEnrollmentCenter({
   const [bookingMode, setBookingMode] = useState<'simple' | 'advanced'>('simple');
   const [bookingStep, setBookingStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [allowMetadataOnly, setAllowMetadataOnly] = useState(false);
+  const [autoBookingCode, setAutoBookingCode] = useState<string>(() => generateBookingCode());
   const [anglePhotos, setAnglePhotos] = useState<{ file: File; angle: string }[]>([]);
   const [primaryPreviewUrl, setPrimaryPreviewUrl] = useState<string | null>(null);
   const [editingSubject, setEditingSubject] = useState<AgencySubject | null>(null);
@@ -367,7 +382,7 @@ export default function SubjectEnrollmentCenter({
       }
 
       setBookingStep(3);
-      const subjectCodeVal = String(fields.get('subject_code') || '').trim() || null;
+      const subjectCodeVal = String(fields.get('subject_code') || '').trim() || autoBookingCode;
       const entryPayload = {
         ...(editingSubject ? { id: editingSubject.id } : {}),
         subject_code: subjectCodeVal,
@@ -401,6 +416,7 @@ export default function SubjectEnrollmentCenter({
       form.reset();
       clearSelectedMugshots();
       setAllowMetadataOnly(false);
+      setAutoBookingCode(generateBookingCode());
 
       if (editingSubject) {
         setEditingSubject(null);
@@ -769,6 +785,7 @@ export default function SubjectEnrollmentCenter({
             className={tab === 'enroll' ? '' : 'lv-secondary'}
             onClick={() => {
               setEditingSubject(null);
+              setAutoBookingCode(generateBookingCode());
               clearSelectedMugshots();
               setTab('enroll');
             }}
@@ -1128,14 +1145,29 @@ export default function SubjectEnrollmentCenter({
                 {/* Right Column: Convict / Subject Booking Demographics */}
                 <div className="lv-form-grid">
                   <label>
-                    Booking / Inmate / Subject Code
-                    <input
-                      name="subject_code"
-                      defaultValue={editingSubject?.subject_code || ''}
-                      maxLength={80}
-                      disabled={busy}
-                      placeholder="e.g. NPF-2026-0842 or AFIS-1042"
-                    />
+                    Booking / Inmate / Subject Code (auto-generated)
+                    <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+                      <input
+                        key={editingSubject ? `edit-${editingSubject.id}` : `auto-${autoBookingCode}`}
+                        name="subject_code"
+                        defaultValue={editingSubject?.subject_code || autoBookingCode}
+                        maxLength={80}
+                        required
+                        disabled={busy}
+                        placeholder="Auto-generated e.g. AFIS-2026-7K4M9Q"
+                      />
+                      {!editingSubject && (
+                        <button
+                          type="button"
+                          className="lv-secondary"
+                          disabled={busy}
+                          onClick={() => setAutoBookingCode(generateBookingCode())}
+                          title="Generate a fresh booking code"
+                        >
+                          Regenerate
+                        </button>
+                      )}
+                    </div>
                   </label>
                   <label>
                     Full Name *

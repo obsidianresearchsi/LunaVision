@@ -512,10 +512,24 @@ describe('Video Intelligence UI Workflows', () => {
       });
 
       const codeInput = host.querySelector<HTMLInputElement>('input[name="subject_code"]')!;
+      expect(codeInput.value).toMatch(/^AFIS-\d{4}-[A-HJ-NP-Z2-9]{6}$/);
+      const firstCode = codeInput.value;
+
+      const regenBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.textContent?.trim() === 'Regenerate',
+      )!;
+      expect(regenBtn).toBeTruthy();
+      await act(async () => {
+        regenBtn.click();
+      });
+      const updatedCodeInput = host.querySelector<HTMLInputElement>('input[name="subject_code"]')!;
+      expect(updatedCodeInput.value).toMatch(/^AFIS-\d{4}-[A-HJ-NP-Z2-9]{6}$/);
+      expect(updatedCodeInput.value).not.toBe(firstCode);
+      const submittedCode = updatedCodeInput.value;
+
       const nameInput = host.querySelector<HTMLInputElement>('input[name="full_name"]')!;
       const offenseInput = host.querySelector<HTMLTextAreaElement>('textarea[name="offense_summary"]')!;
       const locInput = host.querySelector<HTMLInputElement>('input[name="last_known_location"]')!;
-      codeInput.value = 'NPF-2026-901';
       nameInput.value = 'Suleiman Bello';
       offenseInput.value = 'Convicted armed hijacking & escape';
       locInput.value = 'Lagos';
@@ -546,7 +560,7 @@ describe('Video Intelligence UI Workflows', () => {
         expect.objectContaining({
           target: 'ws-ag',
           entry: expect.objectContaining({
-            subject_code: 'NPF-2026-901',
+            subject_code: submittedCode,
             full_name: 'Suleiman Bello',
             offense_summary: 'Convicted armed hijacking & escape',
             last_known_location: 'Lagos',
@@ -562,7 +576,11 @@ describe('Video Intelligence UI Workflows', () => {
         }),
       );
       expect(host.textContent).toContain('Enrolled on Face++ & Dossier Database: Suleiman Bello');
+      expect(host.textContent).toContain(submittedCode);
       expect(host.textContent).toContain('ftok_convict_901');
+      const nextCodeInput = host.querySelector<HTMLInputElement>('input[name="subject_code"]')!;
+      expect(nextCodeInput.value).toMatch(/^AFIS-\d{4}-[A-HJ-NP-Z2-9]{6}$/);
+      expect(nextCodeInput.value).not.toBe(submittedCode);
 
       const searchBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
         b.textContent?.includes('Search in 1:N Face Search'),
