@@ -51,6 +51,28 @@ async function preparePhotoForCompare(file: File): Promise<File> {
   return new File([finalBlob], `${safeName}.jpg`, { type: 'image/jpeg' });
 }
 
+type LocalPhotoPreview = {
+  url: string | null;
+  name: string;
+  sizeKb: number;
+};
+
+function createFilePreview(file: File): LocalPhotoPreview {
+  const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : null;
+  return {
+    url,
+    name: file.name,
+    sizeKb: Math.max(1, Math.round(file.size / 1024)),
+  };
+}
+
+function revokePreviewUrls(previews: (LocalPhotoPreview | null | undefined)[]) {
+  if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+  for (const item of previews) {
+    if (item?.url && item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
+  }
+}
+
 export default function FaceComparison({
   workspaceId,
   gallery = false,
@@ -71,6 +93,9 @@ export default function FaceComparison({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [notice, setNotice] = useState('');
+  const [probePreview, setProbePreview] = useState<LocalPhotoPreview | null>(null);
+  const [adhocRefPreview, setAdhocRefPreview] = useState<LocalPhotoPreview | null>(null);
+  const [adhocCandPreviews, setAdhocCandPreviews] = useState<LocalPhotoPreview[]>([]);
   const [refPreview, setRefPreview] = useState<string | null>(null);
   const [results, setResults] = useState<ComparisonResult[]>([]);
 
@@ -90,25 +115,73 @@ export default function FaceComparison({
   const probeInput = useRef<HTMLInputElement | null>(null);
   const objectUrls = useRef<string[]>([]);
 
-  function clearPreviews() {
+  function clearResultPreviews() {
     for (const url of objectUrls.current) {
-      if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+      if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
     }
     objectUrls.current = [];
     setRefPreview(null);
   }
 
+  function clearProbeUpload() {
+    setProbePreview(null);
+    if (probeInput.current) probeInput.current.value = '';
+    setDbMatches([]);
+    setDbTelemetry(null);
+    setNotice('');
+  }
+
+  function clearAdhocRefUpload() {
+    setAdhocRefPreview(null);
+    if (refInput.current) refInput.current.value = '';
+    setResults([]);
+    setNotice('');
+  }
+
+  function clearAdhocCandUploads() {
+    setAdhocCandPreviews([]);
+    if (candidateInput.current) candidateInput.current.value = '';
+    setResults([]);
+    setNotice('');
+  }
+
+  function handleProbeSelect(fileList: FileList | null) {
+    const file = fileList?.[0];
+    setProbePreview(file ? createFilePreview(file) : null);
+    setNotice('');
+    setDbMatches([]);
+    setDbTelemetry(null);
+  }
+
+  function handleAdhocRefSelect(fileList: FileList | null) {
+    const file = fileList?.[0];
+    setAdhocRefPreview(file ? createFilePreview(file) : null);
+    setNotice('');
+    setResults([]);
+  }
+
+  function handleAdhocCandSelect(fileList: FileList | null) {
+    const list = fileList ? Array.from(fileList).slice(0, gallery ? 6 : 1) : [];
+    setAdhocCandPreviews(list.map(createFilePreview));
+    setNotice('');
+    setResults([]);
+  }
+
   function trackPreviewUrl(file: File): string | undefined {
-    if (typeof URL.createObjectURL !== 'function') return undefined;
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return undefined;
     const url = URL.createObjectURL(file);
     objectUrls.current.push(url);
     return url;
   }
 
+  useEffect(() => () => revokePreviewUrls([probePreview]), [probePreview]);
+  useEffect(() => () => revokePreviewUrls([adhocRefPreview]), [adhocRefPreview]);
+  useEffect(() => () => revokePreviewUrls(adhocCandPreviews), [adhocCandPreviews]);
+
   useEffect(
     () => () => {
       operation.current?.abort();
-      clearPreviews();
+      clearResultPreviews();
     },
     [],
   );
@@ -123,7 +196,7 @@ export default function FaceComparison({
     setNotice('');
     setDbMatches([]);
     setDbTelemetry(null);
-    clearPreviews();
+    clearResultPreviews();
 
     try {
       const formFields = new FormData(event.currentTarget);
@@ -213,7 +286,7 @@ export default function FaceComparison({
     setProgress('');
     setNotice('');
     setResults([]);
-    clearPreviews();
+    clearResultPreviews();
 
     try {
       const photos = new FormData(event.currentTarget);
@@ -388,30 +461,131 @@ export default function FaceComparison({
             Search a probe photograph against this agency's entire isolated Face++ FaceSet of enrolled subjects and
             migrated criminal dossiers. Every query is audit-logged with probe quality telemetry.
           </p>
-          <form
-            onSubmit={(event) => void searchEnrolledDatabase(event)}
-            onChange={() => {
-              setNotice('');
-              setDbMatches([]);
-              setDbTelemetry(null);
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))',
+              gap: '1.25rem',
+              alignItems: 'start',
             }}
           >
-            <label>
-              Probe image (JPEG, PNG, or WebP)
-              <input ref={probeInput} name="probe" type="file" accept="image/jpeg,image/png,image/webp" required disabled={busy} />
-            </label>
-            <div className="lv-form-grid">
+            <form
+              onSubmit={(event) => void searchEnrolledDatabase(event)}
+              onChange={(event) => {
+                if ((event.target as HTMLInputElement).name !== 'probe') {
+                  setNotice('');
+                  setDbMatches([]);
+                  setDbTelemetry(null);
+                }
+              }}
+            >
               <label>
-                Case / Incident Reference (optional)
-                <input name="case_reference" maxLength={120} placeholder="e.g. INV-2026-091" disabled={busy} />
+                Probe image (JPEG, PNG, or WebP)
+                <input
+                  ref={probeInput}
+                  name="probe"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  required
+                  disabled={busy}
+                  onChange={(e) => handleProbeSelect(e.target.files)}
+                />
               </label>
-              <label>
-                Search Context / Notes (optional)
-                <input name="notes" maxLength={300} placeholder="e.g. Gate 3 perimeter still" disabled={busy} />
-              </label>
-            </div>
-            <button disabled={busy}>{busy ? 'Searching agency FaceSet…' : 'Search enrolled subject database'}</button>
-          </form>
+              <div className="lv-form-grid">
+                <label>
+                  Case / Incident Reference (optional)
+                  <input name="case_reference" maxLength={120} placeholder="e.g. INV-2026-091" disabled={busy} />
+                </label>
+                <label>
+                  Search Context / Notes (optional)
+                  <input name="notes" maxLength={300} placeholder="e.g. Gate 3 perimeter still" disabled={busy} />
+                </label>
+              </div>
+              <button disabled={busy}>{busy ? 'Searching agency FaceSet…' : 'Search enrolled subject database'}</button>
+            </form>
+
+            <aside
+              aria-label="Uploaded probe preview"
+              className="lv-card"
+              style={{
+                background: '#091017',
+                border: '1px solid #243547',
+                minHeight: '220px',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                <strong style={{ fontSize: '0.92rem' }}>Probe Photo Preview</strong>
+                {probePreview && (
+                  <button
+                    type="button"
+                    className="lv-secondary"
+                    style={{ padding: '0.25rem 0.55rem', fontSize: '0.78rem' }}
+                    disabled={busy}
+                    onClick={clearProbeUpload}
+                  >
+                    Remove photo
+                  </button>
+                )}
+              </div>
+
+              {probePreview ? (
+                <div>
+                  {probePreview.url ? (
+                    <img
+                      src={probePreview.url}
+                      alt={`Uploaded probe preview: ${probePreview.name}`}
+                      style={{
+                        width: '100%',
+                        maxHeight: '240px',
+                        objectFit: 'contain',
+                        borderRadius: '6px',
+                        border: '1px solid #76efd6',
+                        background: '#05090d',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: '1.25rem',
+                        borderRadius: '6px',
+                        border: '1px dashed #354858',
+                        textAlign: 'center',
+                      }}
+                    >
+                      Selected photo ready for search
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.55rem' }}>
+                    <span className="lv-badge">{probePreview.name}</span>
+                    <span className="lv-badge">{probePreview.sizeKb} KB</span>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => probeInput.current?.click()}
+                  disabled={busy}
+                  style={{
+                    flex: 1,
+                    minHeight: '160px',
+                    background: 'transparent',
+                    border: '1px dashed #354858',
+                    borderRadius: '6px',
+                    color: '#94a3b8',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                    padding: '1rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  Select or upload a probe photograph to preview it here before searching.
+                </button>
+              )}
+            </aside>
+          </div>
 
           {progress && <p role="status">{progress}</p>}
           {notice && <p role="alert" style={{ color: '#ff8b89' }}>{notice}</p>}
@@ -497,35 +671,191 @@ export default function FaceComparison({
             Use clear front-facing JPEG, PNG, or WebP images. Large photos are automatically compressed before being
             sent to Face++ for stateless similarity scoring.
           </p>
-          <form
-            onSubmit={(event) => void compare(event)}
-            onChange={() => {
-              setNotice('');
-              setProgress('');
-              setResults([]);
-              clearPreviews();
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))',
+              gap: '1.25rem',
+              alignItems: 'start',
             }}
           >
-            <label>
-              Reference photo
-              <input ref={refInput} name="reference" type="file" accept="image/jpeg,image/png,image/webp" required disabled={busy} />
-            </label>
-            <label>
-              {gallery ? 'Gallery photos (up to 6)' : 'Photo to compare'}
-              <input
-                ref={candidateInput}
-                name="candidate"
-                type="file"
-                multiple={gallery}
-                accept="image/jpeg,image/png,image/webp"
-                required
-                disabled={busy}
-              />
-            </label>
-            <button disabled={busy}>
-              {busy ? 'Comparing photos…' : gallery ? 'Search gallery' : 'Compare photos'}
-            </button>
-          </form>
+            <form
+              onSubmit={(event) => void compare(event)}
+              onChange={(event) => {
+                const name = (event.target as HTMLInputElement).name;
+                if (name !== 'reference' && name !== 'candidate') {
+                  setNotice('');
+                  setProgress('');
+                  setResults([]);
+                  clearResultPreviews();
+                }
+              }}
+            >
+              <label>
+                Reference photo
+                <input
+                  ref={refInput}
+                  name="reference"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  required
+                  disabled={busy}
+                  onChange={(e) => handleAdhocRefSelect(e.target.files)}
+                />
+              </label>
+              <label>
+                {gallery ? 'Gallery photos (up to 6)' : 'Photo to compare'}
+                <input
+                  ref={candidateInput}
+                  name="candidate"
+                  type="file"
+                  multiple={gallery}
+                  accept="image/jpeg,image/png,image/webp"
+                  required
+                  disabled={busy}
+                  onChange={(e) => handleAdhocCandSelect(e.target.files)}
+                />
+              </label>
+              <button disabled={busy}>
+                {busy ? 'Comparing photos…' : gallery ? 'Search gallery' : 'Compare photos'}
+              </button>
+            </form>
+
+            <aside
+              aria-label="Uploaded comparison previews"
+              className="lv-card"
+              style={{
+                background: '#091017',
+                border: '1px solid #243547',
+                minHeight: '220px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem',
+              }}
+            >
+              <strong style={{ fontSize: '0.92rem' }}>Uploaded Photo Previews</strong>
+              <div style={{ display: 'flex', gap: '0.9rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div style={{ flex: '0 0 auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', gap: '0.4rem' }}>
+                    <small className="lv-muted">Reference</small>
+                    {adhocRefPreview && (
+                      <button
+                        type="button"
+                        className="lv-secondary"
+                        style={{ padding: '0.15rem 0.45rem', fontSize: '0.72rem' }}
+                        disabled={busy}
+                        onClick={clearAdhocRefUpload}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {adhocRefPreview ? (
+                    <div>
+                      {adhocRefPreview.url ? (
+                        <img
+                          src={adhocRefPreview.url}
+                          alt={`Uploaded reference preview: ${adhocRefPreview.name}`}
+                          style={{
+                            width: '104px',
+                            height: '112px',
+                            objectFit: 'cover',
+                            borderRadius: '6px',
+                            border: '1px solid #76efd6',
+                          }}
+                        />
+                      ) : (
+                        <div className="lv-badge">{adhocRefPreview.name}</div>
+                      )}
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.25rem', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {adhocRefPreview.name}
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => refInput.current?.click()}
+                      disabled={busy}
+                      style={{
+                        width: '104px',
+                        height: '112px',
+                        background: 'transparent',
+                        border: '1px dashed #354858',
+                        borderRadius: '6px',
+                        color: '#94a3b8',
+                        fontSize: '0.76rem',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Upload reference
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ flex: 1, minWidth: '140px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', gap: '0.4rem' }}>
+                    <small className="lv-muted">{gallery ? `Gallery (${adhocCandPreviews.length}/6)` : 'Comparison photo'}</small>
+                    {adhocCandPreviews.length > 0 && (
+                      <button
+                        type="button"
+                        className="lv-secondary"
+                        style={{ padding: '0.15rem 0.45rem', fontSize: '0.72rem' }}
+                        disabled={busy}
+                        onClick={clearAdhocCandUploads}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {adhocCandPreviews.length > 0 ? (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {adhocCandPreviews.map((cand, idx) => (
+                        <div key={`${cand.name}-${idx}`} style={{ width: '74px' }}>
+                          {cand.url ? (
+                            <img
+                              src={cand.url}
+                              alt={`Uploaded comparison preview ${cand.name}`}
+                              style={{
+                                width: '74px',
+                                height: '80px',
+                                objectFit: 'cover',
+                                borderRadius: '6px',
+                                border: '1px solid #354858',
+                              }}
+                            />
+                          ) : (
+                            <div className="lv-badge">{cand.name}</div>
+                          )}
+                          <div style={{ fontSize: '0.72rem', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {cand.name}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => candidateInput.current?.click()}
+                      disabled={busy}
+                      style={{
+                        width: '100%',
+                        minHeight: '112px',
+                        background: 'transparent',
+                        border: '1px dashed #354858',
+                        borderRadius: '6px',
+                        color: '#94a3b8',
+                        fontSize: '0.78rem',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        padding: '0.5rem',
+                      }}
+                    >
+                      {gallery ? 'Upload up to 6 gallery photos to preview here' : 'Upload comparison photo to preview here'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </aside>
+          </div>
           {progress && <p role="status">{progress}</p>}
           {notice && <p role="alert" style={{ color: '#ff8b89' }}>{notice}</p>}
           {results.length > 0 && (

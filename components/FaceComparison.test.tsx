@@ -206,5 +206,74 @@ describe('FaceComparison component', () => {
     expect(host.textContent).toContain('Armed hijacking syndicate');
     expect(host.textContent).toContain('89.3');
   });
+
+  it('previews uploaded photos aside immediately before search/comparison is submitted', async () => {
+    vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
+    const origCreateObjectURL = URL.createObjectURL;
+    const origRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn((file: Blob) => `blob:preview-${(file as File).name || 'img'}`);
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      await act(async () => {
+        root.render(<FaceComparison workspaceId="ws-ag-1" gallery />);
+      });
+
+      const probeInput = host.querySelector<HTMLInputElement>('input[name="probe"]')!;
+      const probeFile = new File([new Uint8Array(2048).fill(7)], 'gate-probe.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(probeInput, 'files', { value: [probeFile], configurable: true });
+      await act(async () => {
+        probeInput.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      const probeAside = host.querySelector<HTMLElement>('aside[aria-label="Uploaded probe preview"]')!;
+      expect(probeAside).toBeTruthy();
+      const probeImg = probeAside.querySelector<HTMLImageElement>('img')!;
+      expect(probeImg?.getAttribute('src')).toBe('blob:preview-gate-probe.jpg');
+      expect(probeAside.textContent).toContain('gate-probe.jpg');
+
+      const removeBtn = Array.from(probeAside.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.includes('Remove photo'),
+      )!;
+      await act(async () => {
+        removeBtn.click();
+      });
+      expect(probeAside.querySelector('img')).toBeNull();
+
+      // Switch to 1-vs-6 Ad-Hoc Photo Gallery and verify aside previews for reference + gallery photos
+      const adhocBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.includes('1-vs-6 Ad-Hoc Photo Gallery'),
+      )!;
+      await act(async () => {
+        adhocBtn.click();
+      });
+
+      const refInput = host.querySelector<HTMLInputElement>('input[name="reference"]')!;
+      const candInput = host.querySelector<HTMLInputElement>('input[name="candidate"]')!;
+      Object.defineProperty(refInput, 'files', {
+        value: [new File([new Uint8Array(1024).fill(1)], 'ref-shot.jpg', { type: 'image/jpeg' })],
+        configurable: true,
+      });
+      Object.defineProperty(candInput, 'files', {
+        value: [
+          new File([new Uint8Array(1024).fill(2)], 'cand-a.jpg', { type: 'image/jpeg' }),
+          new File([new Uint8Array(1024).fill(3)], 'cand-b.jpg', { type: 'image/jpeg' }),
+        ],
+        configurable: true,
+      });
+
+      await act(async () => {
+        refInput.dispatchEvent(new Event('change', { bubbles: true }));
+        candInput.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      const adhocAside = host.querySelector<HTMLElement>('aside[aria-label="Uploaded comparison previews"]')!;
+      const imgs = Array.from(adhocAside.querySelectorAll('img')).map((img) => img.getAttribute('src'));
+      expect(imgs).toEqual(['blob:preview-ref-shot.jpg', 'blob:preview-cand-a.jpg', 'blob:preview-cand-b.jpg']);
+    } finally {
+      URL.createObjectURL = origCreateObjectURL;
+      URL.revokeObjectURL = origRevokeObjectURL;
+    }
+  });
 });
 
