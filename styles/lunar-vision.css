@@ -542,3 +542,10 @@
   .lv-command-map-grid[data-command=true]>section{width:100%}
   .lv-command-map-grid[data-command=true]>section:last-child{order:-1}
 }
+
+.lv-video-surface{position:absolute;inset:0}
+.lv-video-frame .lv-video-fullscreen{position:absolute;top:10px;right:10px;z-index:5;padding:7px 10px;background:#10212eea;color:#eafffa;border:1px solid #76efd6;border-radius:4px;font-size:12px}
+.lv-video-frame video::-webkit-media-controls-fullscreen-button{display:none}
+.lv-video-frame:fullscreen,.lv-video-frame[data-expanded=true]{width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;background:#000;aspect-ratio:auto!important}
+.lv-video-frame[data-expanded=true]{position:fixed;inset:0;z-index:2147483000}
+.lv-video-frame:fullscreen .lv-video-surface,.lv-video-frame[data-expanded=true] .lv-video-surface{inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw,calc(100dvh * var(--lv-video-ratio)));height:min(100dvh,calc(100vw / var(--lv-video-ratio)))}

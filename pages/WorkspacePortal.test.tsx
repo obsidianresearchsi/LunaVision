@@ -182,6 +182,33 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     mockRpc.mockResolvedValue({ data: [], error: null });
   }
 
+  it('does not offer organization setup when workspace loading fails and restores access on retry', async () => {
+    setupMockDb({});
+    const normal = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => table === 'lv_workspaces' ? {
+      select: () => ({eq: () => ({order: () => Promise.resolve({data: null, error: {message: 'Network unavailable'}})})}),
+    } : normal(table));
+    const {default: WorkspacePortal} = await import('./WorkspacePortal');
+    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
+    expect(host.textContent).toContain('Workspace access could not be loaded');
+    expect(host.textContent).not.toContain('Set up your organization');
+    setupMockDb({workspaces: [{id: 'saved-biz', name: 'Existing organization', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'saved-biz', role: 'owner'}]});
+    const retry = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Retry workspace access')!;
+    await act(async () => {retry.click();});
+    expect(host.textContent).toContain('Existing organization');
+    expect(host.textContent).not.toContain('Set up your organization');
+  });
+
+  it('hides modules that are not assigned to a staff account', async () => {
+    setupMockDb({workspaces: [{id: 'limited-biz', name: 'Limited organization', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'limited-biz', role: 'viewer', clearance: 0, allowed_modules: ['monitor']}]});
+    const {default: WorkspacePortal} = await import('./WorkspacePortal');
+    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
+    const labels = Array.from(host.querySelectorAll('nav button')).map(button => button.textContent);
+    expect(labels).toContain('Cameras');
+    expect(labels).not.toContain('Playback');
+    expect(labels).not.toContain('Sites & incidents');
+  });
+
   it('renders Business Dashboard with Playback, Change password, record filtering, and status history', async () => {
     setupMockDb({
       workspaces: [{ id: 'biz-1', name: 'Meridian Logistics', kind: 'business', active: true, entitlement: 'Enterprise', organization_details: 'Apapa port terminal' }],

@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import VideoViewport from './VideoViewport';
+import { CameraStream } from './CameraStream';
 import type { DetectedObject } from '@tensorflow-models/coco-ssd';
 import { PlateWatchlistCheck } from './VehicleWatchlist';
 import { supabase } from '../services/supabase';
@@ -255,7 +257,7 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
 
   return (
     <>
-      <div className="lv-video-frame" style={{ aspectRatio: size.width + '/' + size.height }}>
+      <VideoViewport width={size.width} height={size.height}>
         {samplePlate ? <img src={src} alt="Photograph of a Niger State vehicle plate"
           hidden={frozen} onError={() => setStatus('The sample photo could not be loaded.')}
           onLoad={event => {
@@ -269,7 +271,7 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
             setCrop(samplePlateRegion);
             setFrozen(true);
             void readPlate(samplePlateRegion);
-          }} /> : <video ref={video} crossOrigin="anonymous" src={src} controls={!frozen} playsInline preload="auto"
+          }} /> : <CameraStream ref={video} crossOrigin="anonymous" src={src} controls={!frozen} controlsList="nofullscreen noremoteplayback" disablePictureInPicture playsInline preload="auto"
           onLoadedMetadata={event => {
             const { videoWidth, videoHeight } = event.currentTarget;
             if (!videoWidth || !videoHeight) return;
@@ -324,7 +326,7 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
             width: crop.width * 100 + '%', height: crop.height * 100 + '%',
           }} />
         )}
-      </div>
+      </VideoViewport>
       <div className="lv-video-actions">
         {frozen ? (
           <>

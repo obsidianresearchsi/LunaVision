@@ -67,13 +67,14 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const [requestedCamera, setRequestedCamera] = useState<string>();
   const [account, setAccount] = useState<string | null>(null);
   const accountRef = useRef<string | null>(null);
+  const [workspaceLoadFailed, setWorkspaceLoadFailed] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [ready, setReady] = useState(!portalEnabled);
   const [register, setRegister] = useState(() => !agency && emailFlowsEnabled && new URLSearchParams(location.search).get('mode') === 'register');
   const [requestReset, setRequestReset] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [memberships, setMemberships] = useState<{ workspace_id: string; role: string }[]>([]);
+  const [memberships, setMemberships] = useState<{ workspace_id: string; role: string; clearance?: number; allowed_modules?: string[] }[]>([]);
   const [admin, setAdmin] = useState(false);
   const [selected, setSelected] = useState('');
   const [records, setRecords] = useState<RecordRow[]>([]);
@@ -106,7 +107,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     const requestingAccount = accountRef.current;
     const [teams, members, platform] = await Promise.all([
       supabase.from('lv_workspaces').select('id,name,kind,active,entitlement,organization_details').eq('kind', kind).order('name'),
-      supabase.from('lv_memberships').select('workspace_id,role'),
+      supabase.from('lv_memberships').select('workspace_id,role,clearance,allowed_modules'),
       agency ? supabase.from('lv_platform_admins').select('user_id') : Promise.resolve({ data: [], error: null }),
     ]);
     if (requestingAccount !== accountRef.current) return;
@@ -115,21 +116,32 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     setMemberships(members.data);
     setAdmin(Boolean(platform.data?.length));
     const available = platformView ? teams.data : teams.data.filter(team => members.data.some(member => member.workspace_id === team.id));
-    setSelected(previous => available.some(item => item.id === previous) ? previous : available[0]?.id ?? '');
+    let remembered = '';
+    try { remembered = localStorage.getItem(`lv-workspace:${kind}:${requestingAccount}`) ?? ''; } catch { /* Optional preference. */ }
+    setSelected(previous => available.some(item => item.id === previous) ? previous
+      : available.some(item => item.id === remembered) ? remembered : available[0]?.id ?? '');
+    setWorkspaceLoadFailed(false);
     setLoadedFor(requestingAccount);
   }
 
   useEffect(() => {
     setLoadedFor(null);
+    setWorkspaceLoadFailed(false);
     setPanel(agency && !platformView ? 'command' : 'overview');
     if (!account) { setWorkspaces([]); setMemberships([]); setAdmin(false); setSelected(''); return; }
     void loadWorkspaces().catch(error => {
       if (accountRef.current === account) {
         setWorkspaces([]); setMemberships([]); setAdmin(false); setSelected('');
-        setNotice(error.message); setLoadedFor(account);
+        setNotice(error.message); setWorkspaceLoadFailed(true); setLoadedFor(account);
       }
     });
   }, [account]);
+
+  useEffect(() => {
+    if (account && loadedFor === account && selected && !workspaceLoadFailed) {
+      try { localStorage.setItem(`lv-workspace:${kind}:${account}`, selected); } catch { /* Optional preference. */ }
+    }
+  }, [account, loadedFor, selected, kind, workspaceLoadFailed]);
 
   useEffect(() => {
     setRecords([]);
@@ -224,6 +236,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   </main>;
 
   const canManage = platformView && admin || membership?.role === 'owner' || membership?.role === 'admin';
+  const panelModules: Record<string,string> = {command:'monitor',cameras:'monitor',fleet:'monitor',intel:'monitor',alerts:'monitor',playback:'analytics',history:'analytics',rules:'analytics',records:'records',evidence:'evidence',vehicles:'vehicles',watchlist:'vehicles',access:'access',officers:'access',faces:'records',gallery:'records',enrollment:'records',search_history:'records',crawler:'records',crawled_faces:'records'};
+  const canOpenPanel = (id: string) => canManage || !panelModules[id] || !membership?.allowed_modules || membership.allowed_modules.includes(panelModules[id]);
   const minPasswordLength = platformView ? 16 : 12;
   const panels = [
     ['overview', 'Overview'],
@@ -237,7 +251,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   ];
   const visiblePanels = platformView
     ? [...(workspace ? [['overview', 'Overview'], ['issue', 'Issue account'], ['access', 'Agency personnel']] : []), ['password', 'Change password']]
-    : panels;
+    : panels.filter(([id]) => canOpenPanel(id));
   const section = visiblePanels.find(([id]) => id === panel)?.[1] ?? 'Overview';
   const restoredAgency = agency && !platformView;
   const filteredAgencies = workspaces.filter(item =>
@@ -250,7 +264,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     && (record.title + ' ' + record.details).toLowerCase().includes(recordQuery.trim().toLowerCase())
   );
   function navigate(id: string) {
-    if (id === panel) return;
+    if (id === panel || !canOpenPanel(id)) return;
     pageHistory.current.push(panel);
     if (id !== panel) setRequestedCamera(undefined);
     setPanel(id);
@@ -298,7 +312,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       ] : []),
       { id: 'faces', label: 'Face comparison', icon: ScanFace },
     ] },
-  ];
+  ].map(group => ({...group, items: group.items.filter(item => canOpenPanel(item.id))})).filter(group => group.items.length);
   const pendingPages: Record<string, { title: string; detail: string }> = {
     enrollment: { title: 'Enroll subject', detail: 'Biometric subject enrollment is unavailable in this agency console. Manage investigation records through Incidents.' },
     search_history: { title: 'Search history', detail: 'No facial search service is enabled in this agency console. Saved object observations are available in Detection history.' },
@@ -338,7 +352,13 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       {workspace && <span className="lv-console-status" data-active={workspace.active}>{workspace.active ? 'Active workspace' : 'Suspended'}</span>}
     </header>
     {message}
-    {loadedFor !== account ? <p>Loading workspace access…</p> : platformView && !admin ? <p>Platform administrator access is required.</p> : <>
+    {workspaceLoadFailed ? <section className="lv-card" role="alert">
+      <h2>Workspace access could not be loaded</h2>
+      <p>Your saved organization has not been reset. Retry the connection before creating a workspace.</p>
+      <button type="button" disabled={busy} onClick={() => {
+        setBusy(true); void loadWorkspaces().catch(() => setWorkspaceLoadFailed(true)).finally(() => setBusy(false));
+      }}>Retry workspace access</button>
+    </section> : loadedFor !== account ? <p>Loading workspace access…</p> : platformView && !admin ? <p>Platform administrator access is required.</p> : <>
     {platformView && admin && panel === 'overview' && <div className="lv-console-metrics">
       <section className="lv-card"><h2>Registered agencies</h2><strong>{workspaces.length}</strong></section>
       <section className="lv-card"><h2>Active agencies</h2><strong>{workspaces.filter(item => item.active).length}</strong></section>
@@ -396,7 +416,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       </article>)}
     </section>}
     {agency && !platformView && !isMember && <p>Your account needs active membership in the selected agency.</p>}
-    {workspace && <>
+    {workspace && canOpenPanel(panel) && <>
       {platformView && admin && panel === 'issue' && <section className="lv-card">
         {workspace.active ? <AgencyAccountIssuer key={workspace.id} workspaceId={workspace.id} agencyName={workspace.name} />
           : <p>Reactivate {workspace.name} before issuing accounts.</p>}
