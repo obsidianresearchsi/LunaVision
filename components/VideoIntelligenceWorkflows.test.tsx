@@ -1,0 +1,479 @@
+import React, { act } from 'react';
+import { createRoot, Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockFrom, mockRpc, mockStorage } = vi.hoisted(() => ({
+  mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
+  mockStorage: {
+    from: vi.fn(() => ({
+      upload: vi.fn().mockResolvedValue({ error: null }),
+      remove: vi.fn().mockResolvedValue({ error: null }),
+      createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://example.com/signed.jpg' }, error: null }),
+    })),
+  },
+}));
+
+vi.mock('../services/supabase', () => ({
+  workspaceEnabled: true,
+  supabase: {
+    from: mockFrom,
+    rpc: mockRpc,
+    storage: mockStorage,
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u1', email: 'admin@agency.gov.ng' } }, error: null }),
+      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'tok-ag-1' } }, error: null }),
+    },
+  },
+}));
+
+function makeChain(rows: any[] = [], singleRow: any = null) {
+  const chain: any = {
+    select: () => chain,
+    eq: () => chain,
+    is: () => chain,
+    not: () => chain,
+    gte: () => chain,
+    order: () => chain,
+    limit: () => chain,
+    range: () => chain,
+    ilike: () => chain,
+    maybeSingle: () => Promise.resolve({ data: singleRow, error: null }),
+    single: () => Promise.resolve({ data: singleRow, error: null }),
+    insert: () => Promise.resolve({ error: null }),
+    then: (resolve: any, reject?: any) => Promise.resolve({ data: rows, count: rows.length, error: null }).then(resolve, reject),
+  };
+  return chain;
+}
+
+describe('Video Intelligence UI Workflows', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
+  it('CameraControlCenter saves per-camera capabilities, thresholds, and zones via lv_save_camera_intel', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_cameras') {
+        return makeChain([{ id: 'cam-1', name: 'North Gate', location: 'Entrance', playback_url: 'https://example.com/cam1.mp4' }]);
+      }
+      if (table === 'lv_camera_intel_settings') {
+        return makeChain([], {
+          revision: 2,
+          settings: {
+            capabilities: { people_detection: { enabled: true, sensitivity: 'medium' }, anpr: { enabled: false, sensitivity: 'high' } },
+            zones: [],
+            thresholds: { crowd_max: 12, occupancy_max: 30, loiter_seconds: 25, stationary_seconds: 60, abandoned_seconds: 30, alert_cooldown_seconds: 60 },
+            schedule: { enabled: false, days: [1, 2, 3, 4, 5], start: '00:00', end: '23:59' },
+            notify: { categories: ['intrusion', 'crowd'] },
+          },
+        });
+      }
+      return makeChain();
+    });
+
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_workspace_feature_map') {
+        return Promise.resolve({
+          data: { people_analytics: true, vehicle_analytics: true, advanced_detection: true, anpr: false },
+          error: null,
+        });
+      }
+      if (fn === 'lv_save_camera_intel') {
+        return Promise.resolve({ data: 3, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const { CameraControlCenter } = await import('./CameraControlCenter');
+    await act(async () => {
+      root.render(<CameraControlCenter workspaceId="ws-biz" agency={false} role="admin" />);
+    });
+
+    expect(host.textContent).toContain('North Gate — Entrance');
+    // ANPR should not be rendered for business workspace
+    expect(host.textContent).not.toContain('Automatic Number Plate Recognition (ANPR)');
+
+    const saveBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.textContent?.includes('Save camera settings'),
+    )!;
+    expect(saveBtn).toBeTruthy();
+    await act(async () => {
+      saveBtn.click();
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'lv_save_camera_intel',
+      expect.objectContaining({
+        target: 'ws-biz',
+        camera: 'cam-1',
+        expected_revision: 2,
+      }),
+    );
+    expect(host.textContent).toContain('revision #3');
+  });
+
+  it('VehicleRegistry bulk-imports CSV data via lv_import_registry and searches records', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_vehicle_registry') {
+        return makeChain([
+          {
+            id: 'reg-1',
+            plate: 'KJA492AX',
+            make: 'Toyota',
+            model: 'Corolla',
+            colour: 'Silver',
+            vehicle_type: 'Car',
+            vehicle_year: 2021,
+            registration_status: 'registered',
+            notes: '',
+            source_name: 'FRSC',
+            created_at: '2026-11-11T10:00:00Z',
+            updated_at: '2026-11-11T10:00:00Z',
+          },
+        ]);
+      }
+      return makeChain([]);
+    });
+
+    mockRpc.mockResolvedValue({
+      data: { import_id: 'imp-1', total: 1, inserted: 1, updated: 0, duplicates: 0, invalid: 0, errors: [] },
+      error: null,
+    });
+
+    const { default: VehicleRegistry } = await import('./VehicleRegistry');
+    await act(async () => {
+      root.render(<VehicleRegistry workspaceId="ws-ag" role="supervisor" />);
+    });
+
+    expect(host.textContent).toContain('KJA492AX');
+    expect(host.textContent).toContain('Toyota Corolla');
+
+    // Simulate CSV upload
+    const fileInput = host.querySelector('input[type="file"]') as HTMLInputElement;
+    const csvFile = new File(['plate,make,model,year,registration_status\nABJ 123 ZZ,Honda,Civic,2022,registered'], 'batch.csv', {
+      type: 'text/csv',
+    });
+    // Polyfill file.text() cleanly in jsdom if needed
+    if (typeof csvFile.text !== 'function') {
+      (csvFile as any).text = async () => 'plate,make,model,year,registration_status\nABJ 123 ZZ,Honda,Civic,2022,registered';
+    }
+    await act(async () => {
+      Object.defineProperty(fileInput, 'files', { value: [csvFile], configurable: true });
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain('Ready to import 1 records');
+    const importBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.textContent?.includes('Import & validate batch'),
+    )!;
+    await act(async () => {
+      importBtn.click();
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'lv_import_registry',
+      expect.objectContaining({
+        target: 'ws-ag',
+        file_name: 'batch.csv',
+      }),
+    );
+  });
+
+  it('WorkspaceAccess exposes Super Admin feature toggles and 5 personnel roles', async () => {
+    mockFrom.mockReturnValue(makeChain([]));
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_workspace_feature_map') {
+        return Promise.resolve({
+          data: {
+            people_analytics: true,
+            vehicle_analytics: true,
+            advanced_detection: true,
+            anpr: true,
+            vehicle_registry: true,
+            security_intelligence: true,
+            business_intelligence: false,
+          },
+          error: null,
+        });
+      }
+      if (fn === 'lv_workspace_staff') {
+        return Promise.resolve({ data: [{ user_id: 'u1', email: 'chief@agency.gov.ng', role: 'owner' }], error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const { default: WorkspaceAccess } = await import('./WorkspaceAccess');
+    await act(async () => {
+      root.render(
+        <WorkspaceAccess
+          workspace={{ id: 'ws-ag', name: 'Lagos Command', kind: 'agency', active: true, entitlement: 'Full' }}
+          platform={true}
+          role="owner"
+          onUpdated={async () => {}}
+        />,
+      );
+    });
+
+    expect(host.textContent).toContain('Organization Feature Entitlements');
+    const roleOptions = Array.from(host.querySelectorAll('select[name="role"] option')).map((o) => (o as HTMLOptionElement).value);
+    expect(roleOptions).toEqual(['member', 'viewer', 'investigator', 'supervisor', 'admin', 'revoke']);
+
+    const enabledButtons = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).filter(
+      (b) => b.textContent?.trim() === 'Enabled',
+    );
+    expect(enabledButtons.length).toBeGreaterThan(0);
+    await act(async () => {
+      enabledButtons[0].click();
+    });
+    expect(mockRpc).toHaveBeenCalledWith(
+      'lv_set_workspace_feature',
+      expect.objectContaining({
+        target: 'ws-ag',
+        is_enabled: false,
+      }),
+    );
+  });
+
+  it('SubjectEnrollmentCenter displays audit history and migrates criminal CSV + mugshots into Face++', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        face_token: 'ftok_afis_1042',
+        faceset_outer_id: 'lv_wsag',
+        face_indexed: true,
+        quality_score: 90.2,
+      }),
+    );
+    globalThis.fetch = fetchMock as any;
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_agency_subjects') {
+        return makeChain([
+          {
+            id: 'sub-1',
+            subject_code: 'AFIS-1001',
+            full_name: 'Chinedu Okafor',
+            aliases: 'Chinedu',
+            date_of_birth: '1988-02-01',
+            gender: 'Male',
+            nationality: 'Nigerian',
+            category: 'wanted',
+            threat_level: 'high',
+            offense_summary: 'Trans-border smuggling',
+            warrant_reference: 'WR-10',
+            case_reference: 'CR-10',
+            national_id: '',
+            last_known_location: 'Seme Border',
+            physical_marks: '',
+            notes: '',
+            status: 'active',
+            minimum_clearance: 0,
+            primary_photo_path: null,
+            face_token: 'ftok-existing',
+            face_indexed: true,
+            source_name: 'Agency Dossier',
+            created_at: '2026-11-11T10:00:00Z',
+            created_by_label: 'inspector@agency.gov.ng',
+          },
+        ]);
+      }
+      if (table === 'lv_face_search_history') {
+        return makeChain([
+          {
+            id: 'hist-1',
+            actor_label: 'inspector@agency.gov.ng',
+            search_mode: 'faceset_1n',
+            probe_snapshot_path: null,
+            top_confidence: 87.4,
+            result_count: 1,
+            results: [
+              { subject_id: 'sub-1', subject_code: 'AFIS-1001', full_name: 'Chinedu Okafor', confidence: 87.4, band: 'high' },
+            ],
+            telemetry: {},
+            case_reference: 'INV-2026-88',
+            notes: 'Gate 2 camera match',
+            created_at: '2026-11-11T10:05:00Z',
+          },
+        ]);
+      }
+      return makeChain([]);
+    });
+
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_start_subject_migration') return Promise.resolve({ data: 'mig-job-1', error: null });
+      if (fn === 'lv_upsert_agency_subject') return Promise.resolve({ data: 'sub-new-1', error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    try {
+      const { default: SubjectEnrollmentCenter } = await import('./SubjectEnrollmentCenter');
+      await act(async () => {
+        root.render(<SubjectEnrollmentCenter workspaceId="ws-ag" role="investigator" initialTab="history" />);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(host.textContent).toContain('1:N Database Search');
+      expect(host.textContent).toContain('INV-2026-88');
+      expect(host.textContent).toContain('87.4%');
+
+      const migBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.includes('Bulk Data & Photo Migration'),
+      )!;
+      await act(async () => {
+        migBtn.click();
+      });
+
+      const fileInputs = host.querySelectorAll<HTMLInputElement>('input[type="file"]');
+      const csvFile = new File(
+        [
+          'subject_code,full_name,category,threat_level,offense_summary,warrant_reference,case_reference,photo_filename\nAFIS-1042,Musa Danladi,wanted,high,Armed robbery,WR-44,CR-88,AFIS-1042.jpg',
+        ],
+        'criminal_export.csv',
+        { type: 'text/csv' },
+      );
+      const photoFile = new File([new Uint8Array(64).fill(7)], 'AFIS-1042.jpg', { type: 'image/jpeg' });
+
+      Object.defineProperty(fileInputs[0], 'files', { value: [csvFile], configurable: true });
+      await act(async () => {
+        fileInputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      Object.defineProperty(fileInputs[1], 'files', { value: [photoFile], configurable: true });
+      await act(async () => {
+        fileInputs[1].dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const form = host.querySelector('form')!;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 8; i++) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/face-intelligence',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_start_subject_migration',
+        expect.objectContaining({ target: 'ws-ag', total: 1 }),
+      );
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_upsert_agency_subject',
+        expect.objectContaining({
+          target: 'ws-ag',
+          entry: expect.objectContaining({
+            subject_code: 'AFIS-1042',
+            full_name: 'Musa Danladi',
+            migration_id: 'mig-job-1',
+          }),
+          photos: [
+            expect.objectContaining({
+              face_token: 'ftok_afis_1042',
+              face_indexed: true,
+            }),
+          ],
+        }),
+      );
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_update_subject_migration',
+        expect.objectContaining({ target_migration: 'mig-job-1', next_status: 'completed', indexed: 1 }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('VehicleWatchlist bulk migrates CSV rows and matched photos via lv_import_watchlist', async () => {
+    mockFrom.mockImplementation(() => makeChain([]));
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_import_watchlist') {
+        return Promise.resolve({
+          data: { inserted: 1, updated: 0, duplicates: 0, invalid: 0, errors: [] },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const { default: VehicleWatchlist } = await import('./VehicleWatchlist');
+    await act(async () => {
+      root.render(<VehicleWatchlist workspaceId="ws-ag" role="investigator" />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const summaries = Array.from(host.querySelectorAll('summary'));
+    const bulkSummary = summaries.find((s) => s.textContent?.includes('Bulk Migrate Plate Watchlist'))!;
+    expect(bulkSummary).toBeTruthy();
+
+    const bulkDetails = bulkSummary.closest('details')!;
+    bulkDetails.open = true;
+
+    const fileInputs = bulkDetails.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const wlCsv = new File(
+      ['plate,category,case_reference,make,model,colour,status,photo_filename\nLAG-123-AA,stolen,CR-2026-101,Toyota,Hilux,White,active,LAG123AA.jpg'],
+      'hotlist.csv',
+      { type: 'text/csv' },
+    );
+    const carPhoto = new File([new Uint8Array(64).fill(5)], 'LAG123AA.jpg', { type: 'image/jpeg' });
+
+    Object.defineProperty(fileInputs[0], 'files', { value: [wlCsv], configurable: true });
+    await act(async () => {
+      fileInputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 25));
+    });
+    Object.defineProperty(fileInputs[1], 'files', { value: [carPhoto], configurable: true });
+    await act(async () => {
+      fileInputs[1].dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const migForm = bulkDetails.querySelector('form')!;
+    await act(async () => {
+      migForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'lv_import_watchlist',
+      expect.objectContaining({
+        target: 'ws-ag',
+        file_name: 'hotlist.csv',
+        entries: [
+          expect.objectContaining({
+            plate: 'LAG-123-AA',
+            category: 'stolen',
+            case_reference: 'CR-2026-101',
+          }),
+        ],
+      }),
+    );
+  });
+});
+

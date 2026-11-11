@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
 import VideoAnalysis from './VideoAnalysis';
 import CameraChat from './CameraChat';
+import { roleCan } from '../services/videoIntelligence';
 import { CameraStream } from './CameraStream';
 import CameraSourceFields from './CameraSourceFields';
 
@@ -48,7 +49,7 @@ export function WorkspaceCameras({
   const [inventoryAttempt, setInventoryAttempt] = useState(0);
   const [query, setQuery] = useState('');
   const [connectionMode, setConnectionMode] = useState('playback');
-  const canConfigure = canAdd;
+  const canConfigure = roleCan(role, 'configure', platformAdmin);
   const filteredCameras = cameras.filter((camera) =>
     (camera.name + ' ' + camera.location).toLowerCase().includes(query.trim().toLowerCase()),
   );
@@ -80,6 +81,38 @@ export function WorkspaceCameras({
       mounted = false;
     };
   }, [workspaceId, initialCameraId, inventoryAttempt]);
+
+  async function reportStreamOffline(cam: Camera) {
+    try {
+      const { data: cfg } = await supabase
+        .from('lv_camera_intel_settings')
+        .select('settings')
+        .eq('camera_id', cam.id)
+        .maybeSingle();
+      const cameraHealthEnabled = (cfg?.settings as any)?.capabilities?.camera_health?.enabled ?? true;
+      if (!cameraHealthEnabled) return;
+      await supabase.rpc('lv_record_intel_events', {
+        target: workspaceId,
+        events: [
+          {
+            request_id: crypto.randomUUID(),
+            camera: cam.id,
+            source: 'camera',
+            category: 'camera_offline',
+            count: 1,
+            occurred_at: new Date().toISOString(),
+            payload: {
+              camera_name: cam.name,
+              camera_location: cam.location,
+              summary: 'Camera playback stream failed to connect in browser',
+            },
+          },
+        ],
+      });
+    } catch {
+      // Ignore transient telemetry error
+    }
+  }
 
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -275,9 +308,12 @@ export function WorkspaceCameras({
             key={active?.id ?? 'local'}
             cameraUrl={active?.stream_type === 'mjpeg' ? undefined : active?.playback_url ?? undefined}
             cameraId={active?.id}
+            cameraName={active?.name}
+            cameraLocation={active?.location}
             workspaceId={workspaceId}
             samples
             watchlistWorkspaceId={agency ? workspaceId : undefined}
+            onInspectEvent={onInspectEvent}
           />
         )}
       </details>

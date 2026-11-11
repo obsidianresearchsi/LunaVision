@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockFrom, mockRpc, mockAuth } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -35,6 +35,22 @@ vi.mock('../components/VideoAnalysis', () => ({
 describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
   let host: HTMLDivElement;
   let root: Root;
+  let WorkspacePortalComp: React.ComponentType<{ agency: boolean; platformView: boolean }>;
+
+  beforeAll(async () => {
+    ({ default: WorkspacePortalComp } = await import('./WorkspacePortal'));
+  }, 20000);
+
+  async function renderAndFlush(element: React.ReactElement) {
+    await act(async () => {
+      root.render(element);
+    });
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -171,66 +187,54 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
           }),
         };
       }
-      return {
-        select: () => ({
-          eq: () => ({
-            order: () => Promise.resolve({ data: [], error: null }),
-          }),
-        }),
+      const chain: any = {
+        select: () => chain,
+        eq: () => chain,
+        neq: () => chain,
+        is: () => chain,
+        not: () => chain,
+        gte: () => chain,
+        order: () => chain,
+        limit: () => chain,
+        range: () => chain,
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        single: () => Promise.resolve({ data: null, error: null }),
+        then: (resolve: any, reject?: any) => Promise.resolve({ data: [], count: 0, error: null }).then(resolve, reject),
       };
+      return chain;
     });
-    mockRpc.mockResolvedValue({ data: [], error: null });
-  }
-
-  it('finishes a confirmed business signup once and reuses an existing membership', async () => {
-    mockAuth.onAuthStateChange.mockImplementation((callback: any) => {
-      callback('SIGNED_IN', {user: {id: 'user-1', user_metadata: {business_signup_version: 1, organization_name: 'New customer'}}});
-      return {data: {subscription: {unsubscribe: vi.fn()}}};
-    });
-    setupMockDb({});
-    mockRpc.mockImplementation(async (name: string) => {
-      if (name === 'lv_create_business') {
-        setupMockDb({workspaces: [{id: 'created-biz', name: 'New customer', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'created-biz', role: 'owner'}]});
-        return {data: 'created-biz', error: null};
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_workspace_feature_map') {
+        return Promise.resolve({
+          data: {
+            people_analytics: true,
+            vehicle_analytics: true,
+            advanced_detection: true,
+            anpr: true,
+            vehicle_registry: true,
+            security_intelligence: true,
+            business_intelligence: true,
+            biometric_enrollment: true,
+            face_search: true,
+          },
+          error: null,
+        });
       }
-      return {data: [], error: null};
+      if (fn === 'lv_alert_summary') {
+        return Promise.resolve({ data: { open: 2, high: 1 }, error: null });
+      }
+      if (fn === 'lv_platform_organizations') {
+        return Promise.resolve({
+          data: [
+            ...workspaces.map((w) => ({ id: w.id, name: w.name, kind: w.kind, active: w.active, features: {} })),
+            { id: 'biz-global-1', name: 'Global Retail Mall', kind: 'business', active: true, features: {} },
+          ],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: [], error: null });
     });
-    const {default: WorkspacePortal} = await import('./WorkspacePortal');
-    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
-    expect(host.textContent).toContain('New customer');
-    expect(host.textContent).not.toContain('Set up your organization');
-    await act(async () => root.render(<div/>));
-    await act(async () => root.render(<WorkspacePortal agency={false} platformView={false}/>));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
-  });
-
-  it('does not offer organization setup when workspace loading fails and restores access on retry', async () => {
-    setupMockDb({});
-    const normal = mockFrom.getMockImplementation()!;
-    mockFrom.mockImplementation((table: string) => table === 'lv_workspaces' ? {
-      select: () => ({eq: () => ({order: () => Promise.resolve({data: null, error: {message: 'Network unavailable'}})})}),
-    } : normal(table));
-    const {default: WorkspacePortal} = await import('./WorkspacePortal');
-    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
-    expect(host.textContent).toContain('Workspace access could not be loaded');
-    expect(host.textContent).not.toContain('Set up your organization');
-    setupMockDb({workspaces: [{id: 'saved-biz', name: 'Existing organization', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'saved-biz', role: 'owner'}]});
-    const retry = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Retry workspace access')!;
-    await act(async () => {retry.click();});
-    expect(host.textContent).toContain('Existing organization');
-    expect(host.textContent).not.toContain('Set up your organization');
-  });
-
-  it('hides modules that are not assigned to a staff account', async () => {
-    setupMockDb({workspaces: [{id: 'limited-biz', name: 'Limited organization', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'limited-biz', role: 'viewer', clearance: 0, allowed_modules: ['monitor']}]});
-    const {default: WorkspacePortal} = await import('./WorkspacePortal');
-    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
-    const labels = Array.from(host.querySelectorAll('nav button')).map(button => button.textContent);
-    expect(labels).toContain('Cameras');
-    expect(labels).not.toContain('Playback');
-    expect(labels).not.toContain('Sites & incidents');
-  });
+  }
 
   it('renders Business Dashboard with Playback, Change password, record filtering, and status history', async () => {
     setupMockDb({
@@ -245,10 +249,7 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
       ],
     });
 
-    const { default: WorkspacePortal } = await import('./WorkspacePortal');
-    await act(async () => {
-      root.render(<WorkspacePortal agency={false} platformView={false} />);
-    });
+    await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false} />);
 
     expect(host.textContent).toContain('Meridian Logistics');
     const navButtons = Array.from(host.querySelectorAll('nav button')).map(b => b.textContent?.trim());
@@ -289,10 +290,7 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
       platformAdmins: [{ user_id: 'user-1' }],
     });
 
-    const { default: WorkspacePortal } = await import('./WorkspacePortal');
-    await act(async () => {
-      root.render(<WorkspacePortal agency={true} platformView={true} />);
-    });
+    await renderAndFlush(<WorkspacePortalComp agency={true} platformView={true} />);
 
     expect(host.textContent).toContain('Agency directory');
     expect(host.textContent).toContain('Lagos State Command');
@@ -314,10 +312,7 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
       ],
     });
 
-    const { default: WorkspacePortal } = await import('./WorkspacePortal');
-    await act(async () => {
-      root.render(<WorkspacePortal agency={true} platformView={false} />);
-    });
+    await renderAndFlush(<WorkspacePortalComp agency={true} platformView={false} />);
 
     expect(host.textContent).toContain('Lagos State Command');
     const configBtn = host.querySelector('button[aria-label="Configuration"]') as HTMLButtonElement;
@@ -325,10 +320,115 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     expect(configBtn).toBeTruthy();
     expect(integrationsBtn).toBeTruthy();
 
-    // Open Enroll subject and verify explicit unavailability notice remains intact
+    // Open Enroll subject and verify live SubjectEnrollmentCenter renders
     const enrollBtn = host.querySelector('button[aria-label="Enroll subject"]') as HTMLButtonElement;
+    expect(enrollBtn).toBeTruthy();
     await act(async () => { enrollBtn.click(); });
-    expect(host.textContent).toContain('Biometric subject enrollment is unavailable in this agency console.');
+    expect(host.textContent).toContain('Agency Subject Enrollment, Bulk Migration & Biometric Dossiers');
+
+    // Open Search history and verify live search audit history renders
+    const histBtn = host.querySelector('button[aria-label="Search history"]') as HTMLButtonElement;
+    expect(histBtn).toBeTruthy();
+    await act(async () => { histBtn.click(); });
+    expect(host.textContent).toContain('Forensic Face Search Audit History');
+
+    // Verify Web crawler remains explicitly unavailable (no non-consensual public web scraping)
+    const crawlerBtn = host.querySelector('button[aria-label="Web crawler"]') as HTMLButtonElement;
+    expect(crawlerBtn).toBeTruthy();
+    await act(async () => { crawlerBtn.click(); });
+    expect(host.textContent).toContain('Face collection and biometric indexing from websites are unavailable in this agency console.');
+
+    // Verify Security Intelligence, Vehicle Registry, and Camera Intelligence panels work
+    const intelBtn = host.querySelector('button[aria-label="Security intelligence"]') as HTMLButtonElement;
+    expect(intelBtn).toBeTruthy();
+    await act(async () => { intelBtn.click(); });
+    expect(host.textContent).toContain('Security Agency Intelligence Dashboard');
+
+    const registryBtn = host.querySelector('button[aria-label="Vehicle registry"]') as HTMLButtonElement;
+    expect(registryBtn).toBeTruthy();
+    await act(async () => { registryBtn.click(); });
+    expect(host.textContent).toContain('Pre-Populated Vehicle Registration Database');
+
+    const camCfgBtn = host.querySelector('button[aria-label="Camera intelligence"]') as HTMLButtonElement;
+    expect(camCfgBtn).toBeTruthy();
+  });
+
+  it('isolates Business Intelligence from security-agency ANPR & watchlist features and renders commercial analytics', async () => {
+    setupMockDb({
+      workspaces: [{ id: 'biz-2', name: 'Victoria Island Mall', kind: 'business', active: true, entitlement: 'Commercial', organization_details: 'Retail complex' }],
+      memberships: [{ workspace_id: 'biz-2', role: 'owner' }],
+    });
+
+    await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false} />);
+
+    const navLabels = Array.from(host.querySelectorAll('nav button')).map((b) => b.textContent?.trim());
+    expect(navLabels).toContain('Business intelligence');
+    expect(navLabels).toContain('Camera intelligence');
+    expect(navLabels.some((l) => l?.startsWith('Alerts'))).toBe(true);
+    expect(navLabels).not.toContain('Vehicle watchlist');
+    expect(navLabels).not.toContain('Vehicle registry');
+    expect(navLabels).not.toContain('Security intelligence');
+    expect(navLabels).not.toContain('Enroll subject');
+    expect(navLabels).not.toContain('Face comparison');
+    expect(navLabels).not.toContain('Gallery search');
+    expect(navLabels).not.toContain('Search history');
+
+    const bizIntelBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(
+      (b) => b.textContent?.trim() === 'Business intelligence',
+    )!;
+    await act(async () => {
+      bizIntelBtn.click();
+    });
+    expect(host.textContent).toContain('Business Intelligence & Operations Analytics');
+    expect(host.textContent).toContain('Customer footfall');
+    expect(host.textContent).toContain('Peak Visiting Hours');
+    expect(host.textContent).not.toContain('ANPR plate reads');
+  });
+
+  it('finishes a confirmed business signup once and reuses an existing membership', async () => {
+    mockAuth.onAuthStateChange.mockImplementation((callback: any) => {
+      callback('SIGNED_IN', {user: {id: 'user-1', user_metadata: {business_signup_version: 1, organization_name: 'New customer'}}});
+      return {data: {subscription: {unsubscribe: vi.fn()}}};
+    });
+    setupMockDb({});
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === 'lv_create_business') {
+        setupMockDb({workspaces: [{id: 'created-biz', name: 'New customer', kind: 'business', active: true, entitlement: '', organization_details: ''}], memberships: [{workspace_id: 'created-biz', role: 'owner'}]});
+        return {data: 'created-biz', error: null};
+      }
+      return {data: [], error: null};
+    });
+    const {default: WorkspacePortal} = await import('./WorkspacePortal');
+    await act(async () => {root.render(<WorkspacePortal agency={false} platformView={false}/>);});
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
+    expect(host.textContent).toContain('New customer');
+    expect(host.textContent).not.toContain('Set up your organization');
+    await act(async () => root.render(<div/>));
+    await act(async () => root.render(<WorkspacePortal agency={false} platformView={false}/>));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'lv_create_business')).toHaveLength(1);
+  });
+
+  it('does not offer organization setup when workspace loading fails, and restores the saved workspace on retry', async () => {
+    setupMockDb({});
+    const normal=mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table:string)=> table==='lv_workspaces' ? {
+      select:()=>({eq:()=>({order:()=>Promise.resolve({data:null,error:{message:'Network unavailable'}})})}),
+    } : normal(table));
+    await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false} />);
+    expect(host.textContent).toContain('Workspace access could not be loaded');
+    expect(host.textContent).not.toContain('Set up your organization');
+    setupMockDb({workspaces:[{id:'saved-biz',name:'Existing organization',kind:'business',active:true,entitlement:'',organization_details:''}],memberships:[{workspace_id:'saved-biz',role:'owner'}]});
+    const retry=Array.from(host.querySelectorAll('button')).find(button=>button.textContent==='Retry workspace access')!;
+    await act(async()=>{retry.click();});
+    expect(host.textContent).toContain('Existing organization');
+    expect(host.textContent).not.toContain('Set up your organization');
+  });
+
+  it('hides modules that are not assigned to a staff account',async()=>{
+    setupMockDb({workspaces:[{id:'limited-biz',name:'Limited organization',kind:'business',active:true,entitlement:'',organization_details:''}],memberships:[{workspace_id:'limited-biz',role:'viewer',clearance:0,allowed_modules:['monitor']}]});
+    await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false}/>);
+    const labels=Array.from(host.querySelectorAll('nav button')).map(button=>button.textContent);
+    expect(labels).toContain('Cameras');expect(labels).not.toContain('Playback');expect(labels).not.toContain('Sites & incidents');
   });
 });
 

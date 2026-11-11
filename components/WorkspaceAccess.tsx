@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { WorkspaceFeatureKey, WorkspaceFeatureMap, defaultFeatureMap } from '../services/videoIntelligence';
 
 type Props = {
   workspace: { id: string; name?: string; kind?: 'business' | 'agency'; active: boolean; entitlement: string };
@@ -7,6 +8,60 @@ type Props = {
   role?: string;
   onUpdated: () => Promise<void>;
 };
+
+const FEATURE_LABELS: { key: WorkspaceFeatureKey; label: string; description: string; kindScope?: 'agency' | 'business' }[] = [
+  {
+    key: 'people_analytics',
+    label: 'People Analytics',
+    description: 'People detection, directional counting, live occupancy, and overcrowding alerts.',
+  },
+  {
+    key: 'vehicle_analytics',
+    label: 'Vehicle Analytics',
+    description: 'Vehicle classification (car/motorcycle/bus/truck), counting, and stationary/parked vehicle detection.',
+  },
+  {
+    key: 'advanced_detection',
+    label: 'Advanced Security & Behavior Detection',
+    description: 'Loitering, restricted-area intrusion, perimeter monitoring, unattended items, tamper & camera health.',
+  },
+  {
+    key: 'anpr',
+    label: 'ANPR & Vehicle Watchlist',
+    description: 'Automatic number plate reading and real-time matching against the security watchlist.',
+    kindScope: 'agency',
+  },
+  {
+    key: 'vehicle_registry',
+    label: 'Pre-Populated Vehicle Registration DB',
+    description: 'Bulk CSV/Excel vehicle registry import, synchronization, and plate enrichment.',
+    kindScope: 'agency',
+  },
+  {
+    key: 'security_intelligence',
+    label: 'Security Agency Intelligence Dashboard',
+    description: 'Agency operational intelligence, ANPR logs, watchlist alerts, and historical investigation reports.',
+    kindScope: 'agency',
+  },
+  {
+    key: 'biometric_enrollment',
+    label: 'Biometric Subject Enrollment & Bulk Migration',
+    description: 'Enroll multi-angle subjects into an isolated agency Face++ FaceSet and bulk migrate criminal dossiers and photo batches.',
+    kindScope: 'agency',
+  },
+  {
+    key: 'face_search',
+    label: '1:N Face Search & Audit History',
+    description: 'Search probe images against the agency enrolled biometric database with clearance filtering and immutable search audit logs.',
+    kindScope: 'agency',
+  },
+  {
+    key: 'business_intelligence',
+    label: 'Business Intelligence Dashboard',
+    description: 'Commercial customer footfall, peak visiting hours, occupancy, and parking analytics.',
+    kindScope: 'business',
+  },
+];
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
   owner: 'Owner · Full workspace control, staff & camera configuration',
@@ -22,6 +77,7 @@ export default function WorkspaceAccess({ workspace, platform, role, onUpdated }
   const [createAccount, setCreateAccount] = useState(false);
   const [setupLink, setSetupLink] = useState('');
   const [activity, setActivity] = useState<{ id: number; action: string; actor_id: string; subject_id: string | null; created_at: string }[]>([]);
+  const [features, setFeatures] = useState<WorkspaceFeatureMap>(() => defaultFeatureMap(!isBusiness));
   const [notice, setNotice] = useState('');
   const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -53,11 +109,15 @@ export default function WorkspaceAccess({ workspace, platform, role, onUpdated }
             .order('id', { ascending: false })
             .limit(60)
         : Promise.resolve({ data: [], error: null }),
-    ]).then(([personnel, events]) => {
+      supabase.rpc('lv_workspace_feature_map', { target: workspace.id }),
+    ]).then(([personnel, events, featRes]) => {
       if (!current) return;
       setLoadError(Boolean(personnel.error || events.error));
       setStaff(personnel.data ?? []);
       setActivity(events.data ?? []);
+      if (featRes.data && typeof featRes.data === 'object' && !Array.isArray(featRes.data)) {
+        setFeatures({ ...defaultFeatureMap(!isBusiness), ...(featRes.data as Partial<WorkspaceFeatureMap>) });
+      }
       setLoading(false);
     });
     return () => {
@@ -105,6 +165,28 @@ export default function WorkspaceAccess({ workspace, platform, role, onUpdated }
     }
   }
 
+  async function toggleFeature(featureKey: WorkspaceFeatureKey, nextEnabled: boolean) {
+    if (!platform) return;
+    setBusy(true);
+    setNotice('');
+    try {
+      const { error } = await supabase.rpc('lv_set_workspace_feature', {
+        target: workspace.id,
+        feature_name: featureKey,
+        is_enabled: nextEnabled,
+      });
+      if (error) throw new Error(error.message);
+      setFeatures((prev) => ({ ...prev, [featureKey]: nextEnabled }));
+      setVersion((v) => v + 1);
+      setNotice(`Feature "${featureKey}" ${nextEnabled ? 'enabled' : 'disabled'} for ${workspace.name || 'organization'}.`);
+      await onUpdated();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Feature setting could not be updated.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="lv-grid">
       <section className="lv-card">
@@ -126,6 +208,37 @@ export default function WorkspaceAccess({ workspace, platform, role, onUpdated }
               <button disabled={busy}>Save agency configuration</button>
             </form>
           </>
+        )}
+
+        {platform && (
+          <div style={{ marginTop: !isBusiness ? '1.5rem' : 0 }}>
+            <h2>Organization Feature Entitlements</h2>
+            <p>
+              Control which intelligence and analytics capabilities are available to{' '}
+              <strong>{workspace.name || 'this organization'}</strong> ({isBusiness ? 'Business' : 'Security Agency'}).
+            </p>
+            {FEATURE_LABELS.filter((f) => !f.kindScope || f.kindScope === (workspace.kind || 'agency')).map((feat) => {
+              const enabled = Boolean(features[feat.key]);
+              return (
+                <article key={feat.key}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                    <div>
+                      <h3 style={{ margin: 0 }}>{feat.label}</h3>
+                      <small>{feat.description}</small>
+                    </div>
+                    <button
+                      type="button"
+                      className={enabled ? undefined : 'lv-secondary'}
+                      disabled={busy}
+                      onClick={() => void toggleFeature(feat.key, !enabled)}
+                    >
+                      {enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         )}
 
         {!(platform && isBusiness) && (

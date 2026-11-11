@@ -1,0 +1,87 @@
+import { PGlite } from '@electric-sql/pglite';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const db=new PGlite();
+const owner='10000000-0000-4000-8000-000000000001', staff='10000000-0000-4000-8000-000000000002', other='10000000-0000-4000-8000-000000000003';
+async function as(user,sql){await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${user}',false);`);try{return await db.query(sql);}finally{await db.exec("reset role; select set_config('request.jwt.claim.sub','',false);");}}
+async function denied(user,sql){await assert.rejects(()=>as(user,sql),'Expected rejection for '+sql.split('(')[0]);}
+try{
+ await db.exec(`create role anon;create role authenticated;create schema auth;create schema storage;
+ create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+ grant usage on schema auth,storage to authenticated;
+ create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz);
+ insert into auth.users values('${owner}','owner@example.com',now()),('${staff}','staff@example.com',now()),('${other}','other@example.com',now());
+ create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+ create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text,metadata jsonb);
+ create function storage.foldername(name text) returns text[] language sql immutable as $$select (string_to_array(name,'/'))[1:array_length(string_to_array(name,'/'),1)-1]$$;
+ alter table storage.objects enable row level security;grant select,insert,delete on storage.objects to authenticated;`);
+ for(const file of ['202611100001_workspaces','202611100002_cameras','202611100004_record_status','202611100005_vehicle_watchlist','202611100006_workspace_governance','202611100007_video_observations','202611100008_corrective_actions','202611110001_command_map','202611110002_agency_operations','202611110003_operation_reliability','202611120001_video_intelligence','202611120002_workspace_access'])
+   await db.exec(await readFile(new URL('../supabase/migrations/'+file+'.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611120004_preserve_staff_access.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611120005_camera_connections.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611120006_viewer_write_guards.sql',import.meta.url),'utf8'));
+ // Vault's native encryption extension is not bundled with PGlite. This stub tests ACLs and
+ // transaction logic only; real encryption is verified separately against Supabase Vault.
+ await db.exec(`create role service_role; create schema vault;
+ create table vault.secrets(id uuid primary key default gen_random_uuid(),secret text,name text);
+ create view vault.decrypted_secrets as select id,secret as decrypted_secret from vault.secrets;
+ create function vault.create_secret(value text,secret_name text,description text) returns uuid language plpgsql as $$declare saved uuid;begin insert into vault.secrets(secret,name)values(value,secret_name)returning id into saved;return saved;end $$;
+ create function vault.update_secret(target uuid,value text) returns void language sql as $$update vault.secrets set secret=value where id=target$$;`);
+ await db.exec(await readFile(new URL('../supabase/migrations/202611120007_camera_vault.sql',import.meta.url),'utf8'));
+ const business=(await as(owner,"select lv_create_business('Saved business') as id")).rows[0].id;
+ assert.equal((await as(owner,"select lv_create_business('Do not duplicate') as id")).rows[0].id,business);
+ assert.equal((await as(owner,"select count(*)::int as n from lv_workspaces where kind='business'")).rows[0].n,1);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','viewer',0,array['monitor'])`);
+ await as(owner,`insert into lv_cameras(workspace_id,name,playback_url,stream_type,minimum_clearance) values('${business}','General gate','https://camera.example/live.m3u8?signature=test','hls',0),('${business}','Restricted gate','https://camera.example/restricted.m3u8','hls',2)`);
+ assert.equal((await as(staff,'select * from lv_cameras')).rows.length,1,'Clearance hides restricted cameras');
+ const generalCamera=(await db.query("select id,revision from lv_cameras where name='General gate'")).rows[0];
+ await as(owner,`select lv_configure_camera_connection('${generalCamera.id}',${generalCamera.revision},'Updated general gate','Gate','https://camera.example/new.m3u8?signature=new','hls',0)`);
+ await denied(owner,`select lv_configure_camera_connection('${generalCamera.id}',${generalCamera.revision},'Stale edit','Gate','https://camera.example/new.m3u8','hls',0)`);
+ await denied(staff,`select lv_configure_camera_connection('${generalCamera.id}',2,'Viewer edit','Gate','https://camera.example/new.m3u8','hls',0)`);
+ assert.equal((await as(other,'select * from lv_cameras')).rows.length,0,'Other accounts remain isolated');
+ await denied(staff,`select lv_set_staff_access('${business}','other@example.com','admin',3,array['monitor'])`);
+ await denied(staff,`insert into lv_records(workspace_id,category,title) values('${business}','incident','Viewer write')`);
+ await denied(staff,`select lv_save_observation('${business}',gen_random_uuid(),null,1,'Viewer write','[]')`);
+ await denied(staff,`insert into lv_agency_alerts(workspace_id,title,severity) values('${business}','Viewer alert','high')`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','member',1,array['monitor','records'])`);
+ await as(owner,`select lv_manage_workspace_access('${business}','staff@example.com','supervisor')`);
+ assert.equal((await db.query(`select clearance from lv_memberships where workspace_id='${business}' and user_id='${staff}'`)).rows[0].clearance,1,'Legacy clients preserve assigned clearance');
+ await as(owner,`insert into lv_records(workspace_id,category,title,minimum_clearance) values('${business}','incident','General incident',0),('${business}','incident','Restricted incident',2)`);
+ const incident=(await db.query("select id from lv_records where title='General incident'")).rows[0].id;
+ const corrective=(await as(owner,`insert into lv_corrective_actions(incident_id,title,responsible_team,due_on) values('${incident}','Repair gate','Maintenance',current_date) returning id`)).rows[0].id;
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','viewer',1,array['monitor','records'])`);
+ await denied(staff,`select lv_complete_corrective_action('${corrective}')`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','member',1,array['monitor','records'])`);
+ assert.equal((await as(staff,'select * from lv_records')).rows.length,1,'Clearance hides restricted records');
+ const restricted=(await db.query(`select id from lv_records where title='Restricted incident'`)).rows[0].id;
+ await denied(staff,`select lv_change_record_status('${restricted}','open','in_review')`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','member',1,array['monitor'])`);
+ assert.equal((await as(staff,'select * from lv_records')).rows.length,0,'Module restrictions apply to direct database reads');
+ await denied(owner,`select lv_set_staff_access('${business}','owner@example.com','member',0,array['monitor'])`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','admin',1,array['monitor'])`);
+ await denied(staff,`select lv_set_staff_access('${business}','other@example.com','member',2,array['monitor'])`);
+ await denied(staff,`select lv_manage_workspace_access('${business}','other@example.com','admin')`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','viewer',1,array['monitor','records'])`);
+ const sourceCamera=(await as(owner,`select lv_register_camera_source('${business}','Private IP camera','Gate',0,'rtsp://192.168.1.50:554/stream1','qa-user','qa-password') as id`)).rows[0].id;
+ const safeRow=(await as(owner,`select * from lv_cameras where id='${sourceCamera}'`)).rows[0];
+ assert.equal(safeRow.source_configured,true);assert.equal(safeRow.playback_url,null,'No fake playback URL');
+ assert.ok(!JSON.stringify(safeRow).includes('qa-password'));assert.ok(!JSON.stringify(safeRow).includes('rtsp://'));
+ await denied(owner,'select * from vault.decrypted_secrets');
+ await denied(owner,'select * from lv_camera_source_secrets');
+ await denied(owner,`select lv_camera_source_for_gateway('${sourceCamera}')`);
+ await denied(staff,`select lv_store_camera_source('${sourceCamera}',2,'rtsp://192.168.1.51/live','intruder','password')`);
+ await denied(owner,`select lv_store_camera_source('${sourceCamera}',1,'rtsp://192.168.1.51/live','stale','password')`);
+ await as(owner,`select lv_store_camera_source('${sourceCamera}',2,'rtsp://192.168.1.51/live','qa-user','replacement-password')`);
+ await db.exec('set role service_role');
+ const gateway=(await db.query(`select lv_camera_source_for_gateway('${sourceCamera}') as config`)).rows[0].config;
+ await db.exec('reset role');
+ assert.equal(gateway.connection.password,'replacement-password');assert.equal(gateway.source_revision,2);
+ const secretId=(await db.query(`select secret_id from lv_camera_source_secrets where camera_id='${sourceCamera}'`)).rows[0].secret_id;
+ await db.query(`delete from lv_cameras where id='${sourceCamera}'`);
+ assert.equal((await db.query(`select count(*)::int as n from vault.secrets where id='${secretId}'`)).rows[0].n,0,'Camera deletion cleans up the Vault secret');
+ const camera=(await db.query(`select id from lv_cameras where name='Restricted gate'`)).rows[0].id;
+ await denied(staff,`select lv_update_agency_camera('${camera}',1,'Hidden edit','','https://camera.example/live.mp4')`);
+ await db.exec(`update lv_workspaces set active=false where id='${business}'`);
+ assert.equal((await as(owner,'select * from lv_cameras')).rows.length,0);
+ console.log('PASS: workspace reuse, signed camera URLs, tenant isolation, module permissions, clearance-filtered records/cameras, viewer write denial, definer RPC guards, self-edit protection, privilege escalation denial, suspension.');
+}catch(error){console.error(error.message);process.exitCode=1;}finally{await db.close();}
