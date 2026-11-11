@@ -90,7 +90,8 @@ export const Layout: React.FC<LayoutProps> = ({
   const visibleGroups = scopedWorkspace?.groups ?? groups
     .map(group => ({ ...group, items: group.items.filter(item => !('admin' in item && item.admin) || commander) }))
     .filter(group => group.items.length);
-  const items = visibleGroups.flatMap(group => group.items);
+  const items = visibleGroups.flatMap(group => group.items)
+    .filter((item, index, all) => all.findIndex(other => other.id === item.id) === index);
   const active = currentPage === 'case_detail' ? 'cases' : currentPage === 'results' ? 'search' : currentPage;
   const heading = items.find(item => item.id === active)?.label ?? 'Workspace';
   const matches = query.trim() ? items.filter(item => (item.id === 'search' ? item.label + ' investigation' : item.label).toLowerCase().includes(query.trim().toLowerCase())) : [];

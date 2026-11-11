@@ -11,7 +11,8 @@ import AgencyAccountIssuer from '../components/AgencyAccountIssuer';
 import { Layout, type WorkspaceNavigationGroup } from '../components/Layout';
 import { UserRole } from '../types';
 import WorkspaceObservations from '../components/WorkspaceObservations';
-import { Activity, Building2, Camera, ClipboardList, KeyRound, LayoutDashboard, LogOut, Map, ScanFace, Search, Shield, UserPlus, Users } from 'lucide-react';
+import VideoAnalysis from '../components/VideoAnalysis';
+import { Activity, ArrowLeft, Bell, Building2, Camera, ClipboardList, Database, FileText, Globe, KeyRound, LayoutDashboard, LogOut, Map, PlayCircle, ScanFace, Search, Settings, Shield, SlidersHorizontal, UserPlus, Users } from 'lucide-react';
 
 type Workspace = { id: string; name: string; kind: 'business' | 'agency'; active: boolean; entitlement: string; organization_details: string };
 type RecordStatus = 'open' | 'in_review' | 'resolved';
@@ -28,6 +29,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const kind = agency ? 'agency' : 'business';
   const signInPath = platformView ? '/agency/admin' : agency ? '/agency' : '/business';
   const [panel, setPanel] = useState(agency && !platformView ? 'command' : 'overview');
+  const pageHistory = useRef<string[]>([]);
   const [requestedCamera, setRequestedCamera] = useState<string>();
   const [account, setAccount] = useState<string | null>(null);
   const accountRef = useRef<string | null>(null);
@@ -198,26 +200,62 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const section = visiblePanels.find(([id]) => id === panel)?.[1] ?? 'Overview';
   const restoredAgency = agency && !platformView;
   function navigate(id: string) {
+    if (id === panel) return;
+    pageHistory.current.push(panel);
     if (id !== panel) setRequestedCamera(undefined);
     setPanel(id);
+  }
+  function goBack() {
+    setRequestedCamera(undefined);
+    setPanel(pageHistory.current.pop() ?? (agency && !platformView ? 'command' : 'overview'));
   }
   const shellGroups: WorkspaceNavigationGroup[] = [
     { label: 'Command', items: [
       { id: 'command', label: 'Command centre', icon: Map },
-      { id: 'overview', label: 'Analytics', icon: LayoutDashboard },
     ] },
     { label: 'Monitor', items: [
-      { id: 'cameras', label: 'Live cameras & playback', icon: Camera },
-      { id: 'history', label: 'Detection history', icon: Activity },
+      { id: 'cameras', label: 'Live cameras', icon: Camera },
+      { id: 'playback', label: 'Playback', icon: PlayCircle },
+      { id: 'alerts', label: 'Alerts', icon: Bell },
     ] },
-    { label: 'EagleEye investigation', items: [
-      { id: 'faces', label: 'Face comparison', icon: ScanFace },
-      { id: 'gallery', label: 'Face search', icon: Search },
-      { id: 'records', label: 'Investigations', icon: ClipboardList },
+    { label: 'Investigate', items: [
+      { id: 'records', label: 'Incidents', icon: ClipboardList },
+      { id: 'evidence', label: 'Evidence', icon: FileText },
       { id: 'vehicles', label: 'Vehicle intelligence', icon: Shield },
     ] },
-    ...(canManage ? [{ label: 'Administer', items: [{ id: 'access', label: 'Access & audit', icon: Users }] }] : []),
+    { label: 'Operate', items: [
+      { id: 'fleet', label: 'Device fleet', icon: Camera },
+      { id: 'rules', label: 'AI rules', icon: SlidersHorizontal },
+      { id: 'overview', label: 'Analytics', icon: Activity },
+    ] },
+    ...(canManage ? [{ label: 'Administer', items: [
+      { id: 'access', label: 'Access & audit', icon: FileText },
+      { id: 'integrations', label: 'Integrations', icon: Shield },
+    ] }] : []),
+    { label: 'EagleEye investigation', items: [
+      { id: 'gallery', label: 'Face search', icon: Search },
+      { id: 'intel', label: 'Intel map', icon: Globe },
+      { id: 'enrollment', label: 'Enroll subject', icon: UserPlus },
+      { id: 'search_history', label: 'Search history', icon: Activity },
+      { id: 'watchlist', label: 'Watchlist', icon: Users },
+      { id: 'history', label: 'Detection history', icon: Activity },
+      ...(canManage ? [
+        { id: 'officers', label: 'Officer management', icon: Users },
+        { id: 'crawler', label: 'Web crawler', icon: Globe },
+        { id: 'crawled_faces', label: 'Crawled faces', icon: Database },
+        { id: 'integrations', label: 'Configuration', icon: Settings },
+      ] : []),
+      { id: 'faces', label: 'Face comparison', icon: ScanFace },
+    ] },
   ];
+  const pendingPages: Record<string, { title: string; detail: string }> = {
+    rules: { title: 'AI rules', detail: 'Automated rules need the background camera event processor. You can run object detection and plate OCR in Playback now.' },
+    enrollment: { title: 'Enroll subject', detail: 'Subject enrollment requires the agency-scoped biometric gallery and private image storage integration.' },
+    search_history: { title: 'Search history', detail: 'Persisted face search history requires the biometric search integration. Saved object observations are available in Detection history.' },
+    crawler: { title: 'Web crawler', detail: 'The crawler service requires agency-scoped job authorization and indexing before it can run in this workspace.' },
+    crawled_faces: { title: 'Crawled faces', detail: 'Agency-scoped crawler indexing has not been connected.' },
+    integrations: { title: 'Integrations', detail: 'The operations map uses Mapbox. Cameras use registered HTTPS playback URLs. Face comparison requires server-side Face++ configuration, and automated alerts require a background event processor.' },
+  };
   const content = <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
     {!restoredAgency && <>
     <aside className="lv-console-rail">
@@ -231,7 +269,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       {(workspace && !platformView || platformView && loadedFor === account && admin) && <nav aria-label="Workspace navigation">
         {visiblePanels.map(([id, label]) => {
           const Icon = panelIcons[id as keyof typeof panelIcons];
-          return <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} onClick={() => { if (id !== panel) setRequestedCamera(undefined); setPanel(id); }}><Icon size={17} aria-hidden="true" />{label}</button>;
+          return <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={17} aria-hidden="true" />{label}</button>;
         })}
       </nav>}
       <div className="lv-console-session">
@@ -241,8 +279,13 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     </aside>
     </>}
     <main className="lv-portal lv-console-main">
+    <div className="lv-dashboard-return">
+      <button type="button" onClick={goBack}><ArrowLeft size={15} aria-hidden="true" /> Back</button>
+      <button type="button" onClick={() => navigate(agency && !platformView ? 'command' : 'overview')}>{agency && !platformView ? 'Command centre' : 'Overview'}</button>
+      {!agency && <a href="/">Return to website</a>}
+    </div>
     <header className="lv-console-heading"><div><p>{workspace?.name ?? (agency ? 'Agency workspace' : 'Organization workspace')}</p>
-      <h1>{workspace ? section : platformView ? 'Agency administration' : agency ? 'Agency command workspace' : 'Business operations'}</h1></div>
+      <h1>{workspace ? (restoredAgency ? shellGroups.flatMap(group => group.items).find(item => item.id === panel)?.label ?? section : section) : platformView ? 'Agency administration' : agency ? 'Agency command workspace' : 'Business operations'}</h1></div>
       {workspace && <span className="lv-console-status" data-active={workspace.active}>{workspace.active ? 'Active workspace' : 'Suspended'}</span>}
     </header>
     {message}
@@ -301,19 +344,27 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           <button disabled={busy}>Save details</button>
         </form> : workspace.organization_details && <p>{workspace.organization_details}</p>)}
       </section>}
-      {canManage && panel === 'access' && <WorkspaceAccess key={account + selected} workspace={workspace} platform={platformView && admin} role={membership?.role} onUpdated={loadWorkspaces} />}
+      {canManage && ['access', 'officers'].includes(panel) && <WorkspaceAccess key={account + selected} workspace={workspace} platform={platformView && admin} role={membership?.role} onUpdated={loadWorkspaces} />}
       {!platformView && isMember && agency && panel === 'command' && <>
         <WorkspaceOverview key={account + selected + 'command'} workspaceId={selected} agency navigate={navigate} compact />
         <AgencyCommandMap key={account + selected} workspaceId={selected}
-          canManageCameras={canManage || admin} openCamera={id => { setRequestedCamera(id); setPanel('cameras'); }} />
+          commandView canManageCameras={canManage || admin} openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />
       </>}
-      {!platformView && isMember && panel === 'cameras' && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
+      {!platformView && isMember && agency && panel === 'intel' && <AgencyCommandMap key={account + selected} workspaceId={selected}
+        canManageCameras={canManage || admin} openCamera={id => { navigate('cameras'); setRequestedCamera(id); }} />}
+      {!platformView && isMember && ['cameras', 'fleet'].includes(panel) && <WorkspaceCameras key={account + selected} workspaceId={selected} agency={agency}
         initialCameraId={requestedCamera} canAdd={canManage || admin} />}
-      {!platformView && isMember && agency && panel === 'vehicles' && <VehicleWatchlist key={account + selected} workspaceId={selected} />}
+      {!platformView && isMember && agency && panel === 'playback' && <section className="lv-card"><VideoAnalysis workspaceId={selected} watchlistWorkspaceId={selected} samples /></section>}
+      {!platformView && isMember && agency && panel === 'evidence' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
+      {!platformView && isMember && agency && pendingPages[panel] && <section className="lv-card">
+        <h2>{pendingPages[panel].title}</h2><p role="status">{pendingPages[panel].detail}</p>
+        <button type="button" onClick={() => navigate('playback')}>Open playback and analysis</button>
+      </section>}
+      {!platformView && isMember && agency && ['vehicles', 'watchlist'].includes(panel) && <VehicleWatchlist key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && agency && panel === 'faces' && <FaceComparison key={account + selected} workspaceId={selected} />}
       {!platformView && isMember && agency && panel === 'gallery' && <FaceComparison key={account + selected + 'gallery'} workspaceId={selected} gallery />}
       {!platformView && isMember && panel === 'history' && <WorkspaceObservations key={account + selected} workspaceId={selected} />}
-      {!platformView && isMember && panel === 'records' && <div className="lv-grid">
+      {!platformView && isMember && ['records', 'alerts'].includes(panel) && <div className="lv-grid">
         <section className="lv-card"><h2>{agency ? 'Investigation register' : 'Site and incident records'}</h2>
           {recordScope !== account + selected ? <p>Loading records…</p> : recordsFailed ? (
             <p role="alert">Records could not be loaded. <button type="button" className="lv-secondary" onClick={() => setRecordsAttempt(attempt => attempt + 1)}>Retry records</button></p>

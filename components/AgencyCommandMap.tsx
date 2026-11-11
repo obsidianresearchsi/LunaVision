@@ -11,8 +11,8 @@ type MapItem = {
 const statuses = { open: 'Open', in_review: 'In review', resolved: 'Resolved' };
 const colors = { camera: '#76efd6', investigation: '#ffc485' };
 
-export default function AgencyCommandMap({ workspaceId, canManageCameras, openCamera }: {
-  workspaceId: string; canManageCameras: boolean; openCamera: (id: string) => void;
+export default function AgencyCommandMap({ workspaceId, canManageCameras, openCamera, commandView = false }: {
+  workspaceId: string; canManageCameras: boolean; openCamera: (id: string) => void; commandView?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -123,7 +123,7 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
     finally { setSaving(false); }
   }
 
-  return <div className="lv-command-map-grid">
+  return <div className="lv-command-map-grid" data-command={commandView}>
     <section className="lv-card">
       <h2>Map layers</h2>
       <label>Search cameras or investigations<input value={query} onChange={event => setQuery(event.target.value)} /></label>
