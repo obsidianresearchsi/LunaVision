@@ -24,6 +24,7 @@ try {
     grant usage on schema auth,storage to authenticated;
     create table lv_workspaces(id uuid primary key,kind text,active boolean default true,name text default 'QA workspace');
     create table lv_memberships(workspace_id uuid,user_id uuid,role text);
+    create function lv_workspace_active(target uuid) returns boolean language sql stable security definer set search_path='' as $$select exists(select 1 from public.lv_workspaces w join public.lv_memberships m on m.workspace_id=w.id where w.id=target and w.active and m.user_id=auth.uid())$$;
     create table lv_records(id uuid primary key,workspace_id uuid,category text);
     create table lv_cameras(id uuid primary key,workspace_id uuid,name text,location text,playback_url text);
     create table lv_video_observations(id uuid primary key default gen_random_uuid(),workspace_id uuid,camera_id uuid,source text,frame_seconds numeric,summary text,created_by uuid default auth.uid());
@@ -38,8 +39,10 @@ try {
     insert into lv_workspaces(id,kind,active) values('${a}','agency',true),('${b}','agency',true),('${business}','business',true);
     insert into lv_memberships values('${a}','${admin}','admin'),('${a}','${member}','member'),('${b}','${outsider}','admin'),('${business}','${outsider}','owner');
     insert into lv_records values('${caseId}','${a}','investigation'),('${otherCase}','${b}','investigation');
+    insert into lv_cameras values('40000000-0000-4000-8000-000000000001','${a}','North camera','North','https://example.com/north.mp4'),('40000000-0000-4000-8000-000000000002','${b}','Other camera','Other','https://example.com/other.mp4');
   `);
   await db.exec(await readFile(new URL('../supabase/migrations/202611110002_agency_operations.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/202611110003_operation_reliability.sql',import.meta.url),'utf8'));
   const rule = await as(admin,`insert into lv_agency_rules(workspace_id,name,object_label,minimum_confidence,severity) values('${a}','Vehicle threshold','car',0.8,'high') returning id`);
   const ruleId = rule.rows[0].id;
   await denies(member,`insert into lv_agency_rules(workspace_id,name,object_label,minimum_confidence,severity) values('${a}','Forbidden rule','car',0.8,'high')`);
@@ -58,16 +61,44 @@ try {
   await denies(member,`update lv_agency_alerts set status='open' where id='${alertId}'`);
   await as(member,`insert into lv_video_observations(workspace_id,source,frame_seconds,summary,detections) values('${a}','file',13,'car 70%','[{"label":"car","score":0.7}]')`);
   assert.equal((await as(member,'select * from lv_agency_alerts')).rows.length,1,'Below-threshold observation produces no alert');
-  await as(admin,`update lv_agency_rules set enabled=false where id='${ruleId}'`);
+  await as(admin,`select lv_update_agency_rule('${ruleId}',1,'Vehicle threshold',0.8,'high',false,60)`);
+  await denies(admin,`select lv_update_agency_rule('${ruleId}',1,'Stale write',0.9,'low',true,60)`);
+  await denies(member,`select lv_update_agency_rule('${ruleId}',2,'Member edit',0.9,'low',true,60)`);
+  await denies(admin,`update lv_agency_rules set enabled=true where id='${ruleId}'`);
   await as(member,`insert into lv_video_observations(workspace_id,source,frame_seconds,summary,detections) values('${a}','file',14,'car 99%','[{"label":"car","score":0.99}]')`);
   assert.equal((await as(member,'select * from lv_agency_alerts')).rows.length,1,'Disabled rule produces no alert');
   await denies(member,`insert into lv_video_observations(workspace_id,source,frame_seconds,summary,detections) values('${a}','file',15,'Invalid','[{"label":"car","score":1.1}]')`);
+  const eventId='50000000-0000-4000-8000-000000000001';
+  const save=`select lv_save_observation('${a}','${eventId}',null,16,'Idempotent frame','[{"label":"car","score":0.95}]') as id`;
+  const firstSave=await as(member,save);
+  assert.equal((await as(member,save)).rows[0].id,firstSave.rows[0].id,'Lost acknowledgement retry returns original observation');
+  assert.equal((await db.query(`select count(*)::int as n from lv_video_observations where request_id='${eventId}'`)).rows[0].n,1);
+  await denies(member,`select lv_save_observation('${a}','${eventId}',null,16,'Different content','[]')`);
+  await denies(member,`select lv_save_observation('${b}','${eventId}',null,16,'Wrong workspace','[]')`);
+  await denies(member,`select lv_save_observation('${a}',gen_random_uuid(),'40000000-0000-4000-8000-000000000002',16,'Wrong camera','[]')`);
+  await as(admin,`select lv_update_agency_rule('${ruleId}',2,'Vehicle threshold',0.8,'high',true,60)`);
+  await as(member,`select lv_save_observation('${a}',gen_random_uuid(),null,17,'Cooldown frame','[{"label":"car","score":0.99}]')`);
+  assert.equal((await as(member,'select * from lv_agency_alerts')).rows.length,1,'Repeat alert suppressed inside cooldown');
+  await as(member,`select lv_save_observation('${a}',gen_random_uuid(),'40000000-0000-4000-8000-000000000001',17,'Camera frame','[{"label":"car","score":0.99}]')`);
+  assert.equal((await as(member,'select * from lv_agency_alerts')).rows.length,2,'Different camera has independent cooldown');
+  await db.exec(`update lv_agency_alerts set created_at=now()-interval '61 seconds' where rule_id='${ruleId}'`);
+  await as(member,`select lv_save_observation('${a}',gen_random_uuid(),null,18,'After cooldown','[{"label":"car","score":0.99}]')`);
+  assert.equal((await as(member,'select * from lv_agency_alerts')).rows.length,3,'Rule alerts again after cooldown');
+  await as(admin,`select lv_update_agency_camera('40000000-0000-4000-8000-000000000001',1,'Updated camera','North','https://example.com/new.mp4')`);
+  await denies(admin,`select lv_update_agency_camera('40000000-0000-4000-8000-000000000001',1,'Stale camera','North','https://example.com/new.mp4')`);
+  await denies(member,`select lv_update_agency_camera('40000000-0000-4000-8000-000000000001',2,'Member camera','North','https://example.com/new.mp4')`);
+  await denies(outsider,`select lv_update_agency_camera('40000000-0000-4000-8000-000000000001',2,'Outsider camera','North','https://example.com/new.mp4')`);
   const path = `${a}/${member}/evidence.pdf`;
   await as(member,`insert into storage.objects(bucket_id,name,metadata) values('lv-agency-evidence','${path}','{"size":10,"mimetype":"application/pdf"}')`);
   const evidenceSQL = (caseRef,bytes=10) => `insert into lv_agency_evidence(workspace_id,record_id,title,storage_path,file_name,mime_type,byte_size,sha256) values('${a}','${caseRef}','Original report','${path}','report.pdf','application/pdf',${bytes},'${'a'.repeat(64)}')`;
   await denies(member,evidenceSQL(otherCase));
   await denies(member,evidenceSQL(caseId,11));
   await as(member,evidenceSQL(caseId));
+  const register=`select lv_register_evidence('${a}','${caseId}','Original report','','${path}','report.pdf','application/pdf',10,'${'a'.repeat(64)}') as id`;
+  const registered=await as(member,register);
+  assert.equal((await as(member,register)).rows[0].id,registered.rows[0].id,'Evidence retries do not create duplicate registrations');
+  await denies(member,register.replace('Original report','Changed report'));
+  await denies(admin,register);
   assert.equal((await as(outsider,'select * from lv_agency_evidence')).rows.length,0);
   assert.equal((await as(outsider,'select * from storage.objects')).rows.length,0);
   assert.equal((await as(member,'select * from storage.objects')).rows.length,1);
@@ -83,5 +114,6 @@ try {
   assert.equal((await as(member,'select * from storage.objects')).rows.length,0,'Suspension blocks evidence downloads');
   await denies(member,`insert into lv_agency_alerts(workspace_id,title,severity) values('${a}','Suspended report','high')`);
   assert.ok((await db.query('select count(*)::int as n from lv_workspace_activity')).rows[0].n>=6,'Operations audited');
-  console.log('PASS: agency RLS, manager privileges, rule thresholds, duplicate prevention, disabled rules, invalid detections, alert transitions, stale writes, evidence isolation, file metadata checks, immutable evidence, orphan cleanup, suspension, audit.');
-} finally { await db.close(); }
+  console.log('PASS: agency isolation, manager permissions, thresholds, cooldowns per camera, rule and camera edit conflicts, observation and evidence retry idempotency, alert transitions, evidence integrity metadata, immutable files, orphan cleanup, suspension, audit.');
+} catch (error) { console.error(error.message); process.exitCode=1; }
+finally { await db.close(); }

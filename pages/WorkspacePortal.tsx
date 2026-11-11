@@ -250,10 +250,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     ] },
   ];
   const pendingPages: Record<string, { title: string; detail: string }> = {
-    enrollment: { title: 'Enroll subject', detail: 'Subject enrollment requires the agency-scoped biometric gallery and private image storage integration.' },
-    search_history: { title: 'Search history', detail: 'Persisted face search history requires the biometric search integration. Saved object observations are available in Detection history.' },
-    crawler: { title: 'Web crawler', detail: 'The crawler service requires agency-scoped job authorization and indexing before it can run in this workspace.' },
-    crawled_faces: { title: 'Crawled faces', detail: 'Agency-scoped crawler indexing has not been connected.' },
+    enrollment: { title: 'Enroll subject', detail: 'Biometric subject enrollment is unavailable in this agency console. Manage investigation records through Incidents.' },
+    search_history: { title: 'Search history', detail: 'No facial search service is enabled in this agency console. Saved object observations are available in Detection history.' },
+    crawler: { title: 'Web crawler', detail: 'Face collection and biometric indexing from websites are unavailable in this agency console.' },
+    crawled_faces: { title: 'Crawled faces', detail: 'No face-collection crawler is enabled. This page does not contain an indexed biometric gallery.' },
   };
   const content = <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
     {!restoredAgency && <>

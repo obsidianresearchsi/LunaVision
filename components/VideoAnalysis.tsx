@@ -61,6 +61,15 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
   const [detections, setDetections] = useState<DetectedObject[]>([]);
   const [frameSeconds, setFrameSeconds] = useState(0);
   const [savingObservation, setSavingObservation] = useState(false);
+  const [autoSave, setAutoSave] = useState(false);
+  const saveLock = useRef(false);
+  const saveAction = useRef<() => void>(() => {});
+  const lastAutoSave = useRef(0);
+  const lastSavedFrame = useRef<number | undefined>(undefined);
+  const pendingSave = useRef<{
+    target: string; event_id: string; camera: string | null; frame_time: string;
+    description: string; objects: { label: string; score: number }[];
+  } | undefined>(undefined);
   const [observationNotice, setObservationNotice] = useState('');
   const [status, setStatus] = useState('');
   const [frozen, setFrozen] = useState(false);
@@ -129,27 +138,49 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
   }, [detecting, frozen, size]);
 
   async function saveObservation() {
-    if (!observation || savingObservation || detections.length === 0) return;
+    if (!observation || saveLock.current || !pendingSave.current && detections.length === 0) return;
+    saveLock.current = true;
+    lastAutoSave.current = Date.now();
     setSavingObservation(true);
     setObservationNotice('');
-    const summary = detections.map(item => item.class + ' ' + Math.round(item.score * 100) + '%').join(' · ');
+    pendingSave.current ??= {
+      target: observation.workspaceId, event_id: crypto.randomUUID(), camera: observation.cameraId ?? null,
+      frame_time: frameSeconds.toFixed(2),
+      description: detections.map(item => item.class + ' ' + Math.round(item.score * 100) + '%').join(' · '),
+      objects: detections.map(item => ({ label: item.class, score: item.score })),
+    };
+    const pending = pendingSave.current;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
     try {
-      const { error } = await supabase.from('lv_video_observations').insert({
-        workspace_id: observation.workspaceId,
-        camera_id: observation.cameraId ?? null,
-        source: observation.cameraId ? 'camera' : 'file',
-        frame_seconds: frameSeconds.toFixed(2),
-        summary,
-        detections: detections.map(item => ({ label: item.class, score: item.score })),
-      });
+      const { error } = await supabase.rpc('lv_save_observation', pending).abortSignal(controller.signal);
       if (error) throw error;
+      lastSavedFrame.current = Number(pending.frame_time);
+      pendingSave.current = undefined;
       if (mounted.current) setObservationNotice('Observation saved. Find it in Workspace Overview.');
     } catch {
-      if (mounted.current) setObservationNotice('The observation could not be saved. Try again.');
+      if (mounted.current) {
+        setAutoSave(false);
+        setObservationNotice('Save could not be confirmed. Automatic saving paused. Retry the pending frame safely below.');
+      }
     } finally {
+      clearTimeout(timeout);
+      saveLock.current = false;
       if (mounted.current) setSavingObservation(false);
     }
   }
+  saveAction.current = () => {
+    if (detections.length > 0 && frameSeconds !== lastSavedFrame.current) void saveObservation();
+  };
+
+  useEffect(() => {
+    if (!autoSave || !observation || !detecting || frozen) return;
+    const interval = setInterval(() => {
+      if (!document.hidden && video.current && !video.current.paused && Date.now() - lastAutoSave.current >= 15000)
+        saveAction.current();
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [autoSave, observation?.workspaceId, observation?.cameraId, detecting, frozen]);
 
   function freezeFrame() {
     const media = video.current;
@@ -317,9 +348,13 @@ function VideoViewer({ src, samplePlate, watchlistWorkspaceId, observation }: {
       </div>
       {frozen && <p>{samplePlate ? 'The sample plate is read automatically. Redraw the selection to read a different region.' : 'Drag around the plate characters to read them automatically.'}</p>}
       {detecting && detections.length > 0 && <p>{detections.map(({ class: label, score }) => label + ' ' + Math.round(score * 100) + '%').join(' · ')}</p>}
-      {observation && detecting && detections.length > 0 && <div className="lv-video-actions">
-        <button type="button" disabled={savingObservation} onClick={() => void saveObservation()}>{savingObservation ? 'Saving…' : 'Save frame detections'}</button>
-      </div>}
+      {observation && <>
+        <label className="lv-auto-observations"><input type="checkbox" checked={autoSave} disabled={Boolean(pendingSave.current)} onChange={event => setAutoSave(event.target.checked)} /> Save detections automatically every 15 seconds</label>
+        <p>Automatic saving runs while this tab is visible and the video is playing. Enabled agency rules evaluate each saved frame. Samples are excluded.</p>
+        {(detecting && detections.length > 0 || pendingSave.current) && <div className="lv-video-actions">
+          <button type="button" disabled={savingObservation} onClick={() => void saveObservation()}>{savingObservation ? 'Saving…' : pendingSave.current ? 'Retry pending frame' : 'Save frame detections'}</button>
+        </div>}
+      </>}
       {observationNotice && <p role="status">{observationNotice}</p>}
       {status && <p role="status">{status}</p>}
       {plate && <p role="status"><strong>{plate.text}</strong> · {Math.round(plate.confidence)}% OCR confidence. Verify against the frame.</p>}

@@ -514,6 +514,8 @@
 .lv-agency-operations details form{margin-top:16px}
 .lv-agency-operations article button{margin-top:10px}
 .lv-evidence-hash{display:block;overflow-wrap:anywhere;margin:8px 0;color:#9ab1c1}
+.lv-card .lv-auto-observations{display:flex;align-items:center;gap:9px;margin-top:14px}
+.lv-card .lv-auto-observations input{width:auto;accent-color:#76efd6}
 .lv-observation-table{overflow:auto}
 .lv-observation-table table{width:100%;border-collapse:collapse;text-align:left}
 .lv-observation-table :is(th,td){padding:12px;border-bottom:1px solid #31434f;vertical-align:top}

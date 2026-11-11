@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
+import { getBasemap } from '../services/mapConfig';
 
 type Mode = 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations';
 type Row = { id: string; [key: string]: any };
@@ -13,6 +14,9 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
 }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [cases, setCases] = useState<Row[]>([]);
+  const [caseQuery, setCaseQuery] = useState('');
+  const [casesLoading, setCasesLoading] = useState(false);
+  const [casesFailed, setCasesFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -22,21 +26,41 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [more, setMore] = useState(false);
-  const [connections, setConnections] = useState({ cameras: 0, observations: 0 });
+  const [connections, setConnections] = useState({ cameras: 0, observations: 0, map: 'Not checked', checkedAt: '' });
+  const operationLock = useRef(false);
+  const pendingEvidence = useRef<Record<string, string | number> | null>(null);
+  const pendingFile = useRef<File | null>(null);
+  const uploadAttempted = useRef(false);
+  const [hasPendingEvidence, setHasPendingEvidence] = useState(false);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   useEffect(() => {
     let current = true;
+    const controller = new AbortController();
     setLoading(true); setFailed(false); setRows([]);
     async function load() {
       if (mode === 'integrations') {
-        const results = await Promise.all([
+        const mapCheck = async () => {
+          const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
+          if (!token) return 'Mapbox token missing';
+          const tile = getBasemap(token, 'dark-v11').url.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
+          const timeout = setTimeout(() => controller.abort(), 8000);
+          try {
+            const response = await fetch(tile, { signal: controller.signal, credentials: 'omit' });
+            if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) return 'Tile service unavailable';
+            await response.blob();
+            return 'Tile service responding';
+          } catch { return 'Tile check failed · check connection or token restrictions'; }
+          finally { clearTimeout(timeout); }
+        };
+        const [results, map] = await Promise.all([Promise.all([
+          supabase.from('lv_workspaces').select('id,active').eq('id', workspaceId).single(),
           supabase.from('lv_cameras').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
           supabase.from('lv_video_observations').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
-        ]);
-        if (results.some(result => result.error)) throw new Error('Connection check failed');
-        if (current) setConnections({ cameras: results[0].count ?? 0, observations: results[1].count ?? 0 });
+        ]), mapCheck()]);
+        if (results.some(result => result.error) || !results[0].data?.active) throw new Error('Connection check failed');
+        if (current) setConnections({ cameras: results[1].count ?? 0, observations: results[2].count ?? 0, map, checkedAt: new Date().toLocaleString() });
       } else {
         let request = supabase.from(tables[mode]).select('*').eq('workspace_id', workspaceId);
         const search = query.trim().replace(/[%_\\]/g, '');
@@ -47,26 +71,35 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
         if (result.error) throw result.error;
         if (current) { setRows((result.data ?? []).slice(0, pageSize)); setMore((result.data?.length ?? 0) > pageSize); }
       }
-      if (mode === 'evidence') {
-        const result = await supabase.from('lv_records').select('id,title').eq('workspace_id', workspaceId)
-          .eq('category', 'investigation').order('created_at', { ascending: false }).limit(500);
-        if (result.error) throw result.error;
-        if (current) setCases(result.data ?? []);
-      }
     }
     void load().catch(() => { if (current) setFailed(true); }).finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
+    return () => { current = false; controller.abort(); };
   }, [workspaceId, mode, attempt, query, filter, page]);
 
+  useEffect(() => {
+    if (mode !== 'evidence') return;
+    let current = true;
+    setCasesLoading(true); setCasesFailed(false);
+    const timer = setTimeout(async () => {
+      let request = supabase.from('lv_records').select('id,title').eq('workspace_id', workspaceId).eq('category', 'investigation');
+      const search = caseQuery.trim().replace(/[%_\\]/g, '');
+      if (search) request = request.ilike('title', '%' + search + '%');
+      const { data, error } = await request.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
+      if (current) { setCases(data ?? []); setCasesFailed(Boolean(error)); setCasesLoading(false); }
+    }, 250);
+    return () => { current = false; clearTimeout(timer); };
+  }, [workspaceId, mode, caseQuery, attempt]);
+
   async function run(operation: () => Promise<void>, success: string) {
-    if (busy) return;
+    if (operationLock.current) return;
+    operationLock.current = true;
     setBusy(true); setNotice('');
     try {
       await operation();
       if (alive.current) { setNotice(success); setAttempt(value => value + 1); }
     } catch (error) {
       if (alive.current) setNotice(error instanceof Error ? error.message : 'The operation failed. Retry after checking your connection.');
-    } finally { if (alive.current) setBusy(false); }
+    } finally { operationLock.current = false; if (alive.current) setBusy(false); }
   }
 
   function submit(event: FormEvent<HTMLFormElement>, operation: (fields: FormData) => Promise<void>, success: string) {
@@ -77,6 +110,7 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
   }
 
   async function uploadEvidence(fields: FormData) {
+    if (pendingEvidence.current) throw new Error('Finish the pending evidence registration before uploading another file.');
     const file = fields.get('file');
     const allowed = ['image/jpeg', 'image/png', 'application/pdf', 'video/mp4'];
     if (!(file instanceof File) || !allowed.includes(file.type) || file.size < 1 || file.size > 25 * 1024 * 1024 || file.name.length > 240)
@@ -87,18 +121,41 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
     const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
     const extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'application/pdf': 'pdf', 'video/mp4': 'mp4' }[file.type];
     const path = `${workspaceId}/${data.user.id}/${crypto.randomUUID()}.${extension}`;
-    const uploaded = await supabase.storage.from('lv-agency-evidence').upload(path, file, { contentType: file.type, upsert: false });
-    if (uploaded.error) throw new Error('File upload failed. Check your connection and try again.');
-    const result = await supabase.from('lv_agency_evidence').insert({
-      workspace_id: workspaceId, record_id: fields.get('record'), title: String(fields.get('title')).trim(),
-      notes: String(fields.get('notes')).trim(), storage_path: path, file_name: file.name,
-      mime_type: file.type, byte_size: file.size, sha256: hash,
-    });
-    if (result.error) {
-      // A network error can arrive after a successful insert. Storage RLS prevents deleting registered evidence.
-      await supabase.storage.from('lv-agency-evidence').remove([path]);
-      throw new Error('Registration could not be confirmed. Refresh the register before retrying the upload.');
+    pendingEvidence.current = {
+      target: workspaceId, case_id: String(fields.get('record')), evidence_title: String(fields.get('title')).trim(),
+      evidence_notes: String(fields.get('notes')).trim(), path, original_name: file.name,
+      mime: file.type, bytes: file.size, file_hash: hash,
+    };
+    pendingFile.current = file;
+    uploadAttempted.current = false;
+    if (alive.current) setHasPendingEvidence(true);
+    await finishEvidence();
+  }
+
+  async function finishEvidence() {
+    if (!pendingEvidence.current) return;
+    const register = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      try { return await supabase.rpc('lv_register_evidence', pendingEvidence.current!).abortSignal(controller.signal); }
+      finally { clearTimeout(timeout); }
+    };
+    const confirmed = () => {
+      pendingEvidence.current = null;
+      pendingFile.current = null;
+      if (alive.current) setHasPendingEvidence(false);
+    };
+    // A previous response may have been lost after commit. Confirm it before attempting another upload.
+    if (uploadAttempted.current && !(await register()).error) { confirmed(); return; }
+    if (pendingFile.current) {
+      uploadAttempted.current = true;
+      // Reuse the original private path and never overwrite. Even if the upload response is lost,
+      // registration can verify the existing object; an actual upload failure remains safely retryable.
+      await supabase.storage.from('lv-agency-evidence').upload(String(pendingEvidence.current.path), pendingFile.current,
+        { contentType: pendingFile.current.type, upsert: false });
     }
+    if ((await register()).error) throw new Error('Upload or registration could not be confirmed. Retry the pending operation; it reuses the same private file path.');
+    confirmed();
   }
 
   async function downloadEvidence(row: Row) {
@@ -114,7 +171,7 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
 
   return <section className="lv-card lv-agency-operations">
     <h2>{titles[mode]}</h2>
-    <p>{mode === 'rules' ? 'Enabled rules evaluate each newly saved frame detection in this agency. Live browser analysis must be saved to generate an alert. There is no continuous background camera processor.'
+    <p>{mode === 'rules' ? 'Enabled rules evaluate saved object detections. In Playback or a camera’s analysis view, enable automatic saving to evaluate footage every 15 seconds while the video plays in a visible browser tab. Cooldowns limit repeated alerts per camera; uploaded clips share a separate cooldown. Processing stops when the browser closes.'
       : mode === 'evidence' ? 'Original files are stored privately, linked to an investigation, and verified with SHA-256 on download. Registered files cannot be overwritten or deleted from this console.'
       : mode === 'alerts' ? 'Operator reports and matching saved object observations appear here. Acknowledge an alert before resolving it.'
       : mode === 'fleet' ? 'Manage registered devices and open their actual playback endpoints. Registration does not establish that a camera is online.'
@@ -132,7 +189,8 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
         <article><h3>Supabase</h3><p>Connected · access verified</p></article>
         <article><h3>Camera inventory</h3><p>{connections.cameras} registered endpoints</p></article>
         <article><h3>Detection storage</h3><p>{connections.observations} saved observations</p></article>
-        <article><h3>Operations map</h3><p>{import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ? 'Mapbox token configured · open Intel map to check tiles' : 'Mapbox token missing'}</p></article>
+        <article><h3>Operations map</h3><p>{connections.map}</p></article>
+        <p>Last checked {connections.checkedAt}</p>
       </div> : rows.length === 0 ? <p>No {mode} match this view. Saved records will appear here.</p> : rows.map(row => <article key={row.id}>
         <h3>{row.title ?? row.name}</h3>
         <small>{new Date(row.created_at).toLocaleString()}</small>
@@ -153,12 +211,23 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
           <button type="button" disabled={busy} onClick={() => void run(() => downloadEvidence(row), 'File integrity verified. Download started.')}>Verify & download</button>
         </>}
         {mode === 'rules' && <>
-          <p>{row.object_label} · minimum {Math.round(row.minimum_confidence * 100)}% confidence · {row.severity} priority · {row.enabled ? 'Enabled' : 'Disabled'}</p>
+          <p>{row.object_label} · minimum {Math.round(row.minimum_confidence * 100)}% confidence · {row.severity} priority · {row.cooldown_seconds}s cooldown · {row.enabled ? 'Enabled' : 'Disabled'}</p>
           {canManage && <button type="button" disabled={busy} onClick={() => void run(async () => {
-            const { data, error } = await supabase.from('lv_agency_rules').update({ enabled: !row.enabled })
-              .eq('workspace_id', workspaceId).eq('id', row.id).eq('enabled', row.enabled).select('id');
-            if (error || !data?.length) throw new Error('Rule could not be updated. Refresh and retry.');
+            const { error } = await supabase.rpc('lv_update_agency_rule', { target: row.id, expected_revision: row.revision,
+              rule_name: row.name, threshold: row.minimum_confidence, priority: row.severity, active: !row.enabled, repeat_seconds: row.cooldown_seconds });
+            if (error) throw new Error(error.message);
           }, 'Rule updated.')}>{row.enabled ? 'Disable rule' : 'Enable rule'}</button>}
+          {canManage && <details><summary>Edit rule</summary><form onSubmit={event => submit(event, async fields => {
+            const { error } = await supabase.rpc('lv_update_agency_rule', { target: row.id, expected_revision: row.revision,
+              rule_name: String(fields.get('name')).trim(), threshold: Number(fields.get('confidence')) / 100,
+              priority: fields.get('severity'), active: row.enabled, repeat_seconds: Number(fields.get('cooldown')) });
+            if (error) throw new Error(error.message);
+          }, 'Rule saved.')}>
+            <label>Rule name<input name="name" minLength={2} maxLength={100} defaultValue={row.name} required /></label>
+            <label>Minimum confidence (%)<input name="confidence" type="number" min={50} max={100} defaultValue={Math.round(row.minimum_confidence * 100)} required /></label>
+            <label>Repeat alert cooldown (seconds)<input name="cooldown" type="number" min={15} max={3600} defaultValue={row.cooldown_seconds} required /></label>
+            <Severity initial={row.severity} /><button disabled={busy}>Save rule</button>
+          </form></details>}
         </>}
         {mode === 'fleet' && <>
           <p>{row.location || 'Location not specified'}</p><p className="lv-evidence-hash">{row.playback_url}</p>
@@ -166,9 +235,9 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
           {canManage && <details><summary>Edit device</summary><form onSubmit={event => submit(event, async fields => {
             const url = new URL(String(fields.get('url')).trim());
             if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Use a direct HTTPS URL without credentials or query parameters.');
-            const { data, error } = await supabase.from('lv_cameras').update({ name: String(fields.get('name')).trim(), location: String(fields.get('location')).trim(), playback_url: url.href })
-              .eq('workspace_id', workspaceId).eq('id', row.id).select('id');
-            if (error || !data?.length) throw new Error('Device could not be updated. Refresh and retry.');
+            const { error } = await supabase.rpc('lv_update_agency_camera', { target: row.id, expected_revision: row.revision,
+              device_name: String(fields.get('name')).trim(), device_location: String(fields.get('location')).trim(), endpoint: url.href });
+            if (error) throw new Error(error.message);
           }, 'Device saved.')}>
             <label>Device name<input name="name" defaultValue={row.name} minLength={2} maxLength={100} required /></label>
             <label>Location<input name="location" defaultValue={row.location} maxLength={200} /></label>
@@ -192,26 +261,34 @@ export default function AgencyOperations({ workspaceId, mode, canManage, openCam
       <Severity /><button disabled={busy || loading || failed}>Save alert</button>
     </form></details>}
     {mode === 'rules' && canManage && <details><summary>Create a detection rule</summary><form onSubmit={event => submit(event, async fields => {
-      const { error } = await supabase.from('lv_agency_rules').insert({ workspace_id: workspaceId, name: String(fields.get('name')).trim(), object_label: fields.get('label'), minimum_confidence: Number(fields.get('confidence')) / 100, severity: fields.get('severity') });
+      const { error } = await supabase.from('lv_agency_rules').insert({ workspace_id: workspaceId, name: String(fields.get('name')).trim(), object_label: fields.get('label'), minimum_confidence: Number(fields.get('confidence')) / 100, severity: fields.get('severity'), cooldown_seconds: Number(fields.get('cooldown')) });
       if (error) throw new Error('Rule could not be saved. Check your access and retry.');
     }, 'Rule saved and enabled for future saved observations.')}>
       <label>Rule name<input name="name" minLength={2} maxLength={100} required /></label>
       <label>Object<select name="label">{objectLabels.map(label => <option key={label}>{label}</option>)}</select></label>
       <label>Minimum confidence (%)<input name="confidence" type="number" min={50} max={100} step={1} defaultValue={80} required /></label>
+      <label>Repeat alert cooldown (seconds)<input name="cooldown" type="number" min={15} max={3600} defaultValue={60} required /></label>
       <Severity /><button disabled={busy || loading || failed}>Create rule</button>
     </form></details>}
-    {mode === 'evidence' && !loading && !failed && <details><summary>Register evidence</summary>
-      {cases.length === 0 ? <p>Create an investigation in Incidents before registering evidence.</p> : <form onSubmit={event => submit(event, uploadEvidence, 'Evidence registered privately. Original file hash saved.')}>
-        <label>Investigation<select name="record" required>{cases.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+    {mode === 'evidence' && hasPendingEvidence && <div role="status"><p>An evidence upload or registration is awaiting confirmation. Keep this page open until it is confirmed.</p>
+      <button type="button" disabled={busy} onClick={() => void run(finishEvidence, 'Evidence registration confirmed.')}>Retry evidence registration</button>
+    </div>}
+    {mode === 'evidence' && !hasPendingEvidence && !loading && !failed && <details><summary>Register evidence</summary>
+      <label>Find investigation by title<input value={caseQuery} onChange={event => setCaseQuery(event.target.value)} /></label>
+      <p>{casesLoading ? 'Finding investigations…' : casesFailed ? 'Investigation lookup failed. Refresh to retry.' : cases.length ? 'Choose from the latest 100 matching investigations. Search to find older records.' : caseQuery ? 'No investigations match this search.' : 'Create an investigation in Incidents before registering evidence.'}</p>
+      <form onSubmit={event => submit(event, uploadEvidence, 'Evidence registered privately. Original file hash saved.')}>
+        <label>Investigation<select name="record" defaultValue="" required disabled={casesLoading || casesFailed}>
+          <option value="">Choose an investigation</option>{cases.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+        </select></label>
         <label>Evidence title<input name="title" minLength={2} maxLength={140} required /></label>
         <label>Notes<textarea name="notes" maxLength={4000} /></label>
         <label>Original file · maximum 25 MB<input name="file" type="file" accept="image/jpeg,image/png,application/pdf,video/mp4" required /></label>
-        <button disabled={busy}>{busy ? 'Uploading & registering…' : 'Register evidence'}</button>
-      </form>}
+        <button disabled={busy || casesLoading || casesFailed || !cases.length}>{busy ? 'Uploading & registering…' : 'Register evidence'}</button>
+      </form>
     </details>}
   </section>;
 }
 
-function Severity() {
-  return <label>Priority<select name="severity" defaultValue="medium"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>;
+function Severity({ initial = 'medium' }: { initial?: string }) {
+  return <label>Priority<select name="severity" defaultValue={initial}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>;
 }
