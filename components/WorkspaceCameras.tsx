@@ -148,13 +148,21 @@ export function WorkspaceCameras({
           ...connection});
         if(error)throw new Error(cameraRegistrationError(error));
         if(!data)throw new Error('The server did not confirm camera registration. Refresh the camera list before retrying.');
-        const result='Camera source saved encrypted in Supabase Vault. Playback awaits gateway configuration.';
+        let locationSaved=true;
+        if(cameraLocation){
+          try {
+            const {data:pin,error:pinError}=await supabase.from('lv_cameras')
+              .update({latitude:cameraLocation.latitude,longitude:cameraLocation.longitude})
+              .eq('workspace_id',workspaceId).eq('id',data).select('id').single();
+            locationSaved=!pinError&&Boolean(pin);
+          }catch{locationSaved=false;}
+        }
+        const result='Camera source saved encrypted in Supabase Vault. Playback awaits gateway configuration.'+
+          (locationSaved?'':' The camera was saved, but its map location could not be saved. Update the saved camera’s map pin; do not register it again.');
+        setRegistrationFailed(!locationSaved);
         form.reset();setCameraLocation(null);setInventoryAttempt(value=>value+1);setNotice(result);setRegistrationMessage(result);return;
       }
       const url = new URL(String(fields.get('url')).trim());
-      if (url.protocol === 'rtsp:' || url.protocol === 'rtsps:') {
-        throw new Error('RTSP cameras need a streaming gateway. Enter the gateway’s HTTPS HLS or MJPEG playback URL. Keep camera passwords on the gateway.');
-      }
       if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
         throw new Error('Enter an HTTPS camera or gateway URL without embedded username/password or a fragment. Signed query parameters are supported.');
       }
