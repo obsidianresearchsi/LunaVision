@@ -422,7 +422,7 @@ export default function FaceComparison({
                 setResults([]);
               }}
             >
-              1:N Agency Database Search
+              Face search
             </button>
             <button
               type="button"
@@ -434,7 +434,7 @@ export default function FaceComparison({
                 setDbTelemetry(null);
               }}
             >
-              1-vs-6 Ad-Hoc Photo Gallery
+              Photo similarity score
             </button>
             {onOpenEnrollment && (
               <button type="button" onClick={onOpenEnrollment}>

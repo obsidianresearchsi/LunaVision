@@ -40,14 +40,14 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
   useEffect(() => {
     if (!host.current) return;
     const instance = L.map(host.current).setView([9.08, 8.68], 5);
-    const dark = L.tileLayer(commandBasemap.url, commandBasemap.options).addTo(instance);
-    dark.on('tileerror', () => setTileError(true));
-    dark.on('tileload', () => setTileError(false));
+    const satellite = L.tileLayer(basemap.url, basemap.options).addTo(instance);
+    satellite.on('tileerror', () => setTileError(true));
+    satellite.on('tileload', () => setTileError(false));
     if (basemap.url !== commandBasemap.url) {
-      const satellite = L.tileLayer(basemap.url, basemap.options);
-      satellite.on('tileerror', () => setTileError(true));
-      satellite.on('tileload', () => setTileError(false));
-      L.control.layers({ 'Dark map': dark, Satellite: satellite }).addTo(instance);
+      const dark = L.tileLayer(commandBasemap.url, commandBasemap.options);
+      dark.on('tileerror', () => setTileError(true));
+      dark.on('tileload', () => setTileError(false));
+      L.control.layers({ Satellite: satellite, 'Dark map': dark }).addTo(instance);
     }
     map.current = instance;
     markers.current = L.layerGroup().addTo(instance);

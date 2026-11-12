@@ -107,7 +107,7 @@ describe('FaceComparison component', () => {
     });
 
     const adhocBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-      b.textContent?.includes('1-vs-6 Ad-Hoc Photo Gallery'),
+      b.textContent?.includes('Photo similarity score'),
     )!;
     expect(adhocBtn).toBeTruthy();
     await act(async () => {
@@ -242,7 +242,7 @@ describe('FaceComparison component', () => {
 
       // Switch to 1-vs-6 Ad-Hoc Photo Gallery and verify aside previews for reference + gallery photos
       const adhocBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-        b.textContent?.includes('1-vs-6 Ad-Hoc Photo Gallery'),
+        b.textContent?.includes('Photo similarity score'),
       )!;
       await act(async () => {
         adhocBtn.click();
