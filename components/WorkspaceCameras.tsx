@@ -5,6 +5,10 @@ import CameraChat from './CameraChat';
 import { roleCan } from '../services/videoIntelligence';
 import { CameraStream } from './CameraStream';
 import CameraSourceFields from './CameraSourceFields';
+import CameraConnectionActions from './CameraConnectionActions';
+import GatewayCameraFeed from './GatewayCameraFeed';
+import SiteGatewayPanel,{type SiteGateway} from './SiteGatewayPanel';
+import {cameraConnectionLabel,useCameraConnectionStates} from '../services/cameraGateway';
 import {cameraSource,cameraRegistrationError} from '../services/cameraConnection';
 import { LocationPicker, type RecordPosition } from './RecordLocation';
 
@@ -41,6 +45,9 @@ export function WorkspaceCameras({
 }) {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [active, setActive] = useState<Camera>();
+  const [gatewayFeed,setGatewayFeed]=useState<Camera>();
+  const connections=useCameraConnectionStates(workspaceId);
+  const [gateways,setGateways]=useState<SiteGateway[]>([]);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
@@ -157,7 +164,7 @@ export function WorkspaceCameras({
             locationSaved=!pinError&&Boolean(pin);
           }catch{locationSaved=false;}
         }
-        const result='Camera source saved encrypted in Supabase Vault. Playback awaits gateway configuration.'+
+        const result='Camera source saved encrypted in Supabase Vault. Connection unverified: the password has not been tested. Playback awaits gateway configuration.'+
           (locationSaved?'':' The camera was saved, but its map location could not be saved. Update the saved camera’s map pin; do not register it again.');
         setRegistrationFailed(!locationSaved);
         form.reset();setCameraLocation(null);setInventoryAttempt(value=>value+1);setNotice(result);setRegistrationMessage(result);return;
@@ -240,6 +247,7 @@ export function WorkspaceCameras({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
+      <SiteGatewayPanel workspaceId={workspaceId} canManage={canConfigure} onGateways={setGateways} onPaired={()=>setInventoryAttempt(value=>value+1)}/>
       {filteredCameras.map((camera) => (
         <article key={camera.id}>
           <h3>{camera.name}</h3>
@@ -312,13 +320,16 @@ export function WorkspaceCameras({
               </div>
             </details>
           )}
-          {!camera.playback_url && <p>{camera.source_configured ? 'Encrypted source saved. Waiting for a gateway playback URL.' : 'No playback URL configured.'}</p>}
+          <p className="lv-notice">{camera.playback_url ? 'Playback URL configured — open the feed to check it in this browser.' : camera.source_configured ? connections.unavailable?'Gateway status could not be loaded. Refresh before relying on the connection status.':cameraConnectionLabel(connections.states[camera.id]?.state) : 'Not connected — no playback URL configured.'}</p>
+          {connections.states[camera.id]?.gateway_name&&<p>Site gateway: {connections.states[camera.id].gateway_name}</p>}
           <div className="lv-video-actions">
             <button
               type="button"
               className="lv-secondary"
-              disabled={!camera.playback_url}
+              disabled={!camera.playback_url&&!connections.states[camera.id]?.gateway_id}
               onClick={() => {
+                if(!camera.playback_url){setActive(undefined);setShowAnalysis(false);setGatewayFeed(camera);return;}
+                setGatewayFeed(undefined);
                 setPlayback('connecting');
                 setFeedAttempt((attempt) => attempt + 1);
                 setActive(camera);
@@ -333,37 +344,12 @@ export function WorkspaceCameras({
               </button>
             )}
           </div>
-          {canConfigure && <details><summary>Save or replace encrypted IP camera source</summary>
-            <form onSubmit={async event=>{
-              event.preventDefault();if(saving)return;const form=event.currentTarget;const fields=new FormData(form);setSaving(true);setNotice('');
-              try {
-                const {error}=await supabase.rpc('lv_store_camera_source',{target:camera.id,expected_revision:camera.revision,
-                  source_url:String(fields.get('source_url')).trim(),source_username:String(fields.get('source_username')),source_password:String(fields.get('source_password'))});
-                if(error)throw new Error('Source could not be saved. Refresh and check your camera URL, role and clearance.');
-                form.reset();setActive(undefined);setInventoryAttempt(value=>value+1);setNotice('Source credentials saved encrypted. Configure the gateway playback URL to reconnect.');
-              }catch(error){setNotice(error instanceof Error?error.message:'Source could not be saved.');}finally{setSaving(false);}
-            }}><CameraSourceFields/><button disabled={saving}>Save encrypted source</button></form>
-          </details>}
-          {canConfigure && <details><summary>Edit connection &amp; access</summary><form onSubmit={async event=>{
-            event.preventDefault(); if(saving)return; const fields=new FormData(event.currentTarget);setSaving(true);setNotice('');
-            try {
-              const url=new URL(String(fields.get('url')).trim());
-              if(url.protocol!=='https:'||url.username||url.password||url.hash)throw new Error('Enter an HTTPS playback or gateway URL without embedded credentials.');
-              const {error}=await supabase.rpc('lv_configure_camera_connection',{target:camera.id,expected_revision:camera.revision,
-                device_name:String(fields.get('name')).trim(),device_location:String(fields.get('location')).trim(),endpoint:url.href,
-                format:fields.get('stream_type'),clearance:Number(fields.get('clearance'))});
-              if(error)throw new Error(error.message);setActive(undefined);setInventoryAttempt(value=>value+1);setNotice('Camera connection and access saved.');
-            }catch(error){setNotice(error instanceof Error?error.message:'Camera configuration failed.');}finally{setSaving(false);}
-          }}>
-            <label>Camera name<input name="name" defaultValue={camera.name} minLength={2} maxLength={100} required/></label>
-            <label>Location<input name="location" defaultValue={camera.location} maxLength={200}/></label>
-            <label>HTTPS playback URL<input name="url" type="url" defaultValue={camera.playback_url ?? ''} required maxLength={2048}/></label>
-            <label>Stream format<select name="stream_type" defaultValue={camera.stream_type}><option value="video">MP4 / WebM</option><option value="hls">HLS</option><option value="mjpeg">MJPEG</option></select></label>
-            <label>Minimum clearance<select name="clearance" defaultValue={camera.minimum_clearance}><option value="0">0 · General</option><option value="1">1 · Internal</option><option value="2">2 · Restricted</option><option value="3">3 · Confidential</option></select></label>
-            <button disabled={saving}>Save camera connection</button>
-          </form></details>}
+          {canConfigure && <CameraConnectionActions camera={camera} gateways={gateways} gatewayId={connections.states[camera.id]?.gateway_id} onChanged={message => {
+            setActive(undefined);setGatewayFeed(undefined); setInventoryAttempt(value => value + 1); if(message) setNotice(message);
+          }}/>}
         </article>
       ))}
+      {gatewayFeed&&<GatewayCameraFeed key={gatewayFeed.id} cameraId={gatewayFeed.id} name={gatewayFeed.name} onClose={()=>setGatewayFeed(undefined)}/>}
       {active && (
         <article>
           <h3>{active.name}</h3>
@@ -454,7 +440,7 @@ export function WorkspaceCameras({
             <select name="stream_type"><option value="video">MP4 / WebM video</option><option value="hls">HLS camera gateway (.m3u8)</option><option value="mjpeg">MJPEG live feed</option></select>
           </label>}
           <label>Minimum clearance<select name="minimum_clearance" defaultValue="0"><option value="0">0 · General</option><option value="1">1 · Internal</option><option value="2">2 · Restricted</option><option value="3">3 · Confidential</option></select></label>
-          <p>{connectionMode === 'source' ? 'Connection settings are persisted encrypted in Supabase Vault. A trusted gateway connector must load the source and provide a browser-ready playback URL.' : 'Use an HTTPS feed or gateway that converts IP camera video to HLS or MJPEG. H.264 video is recommended. To store a raw camera URL and password securely, choose IP camera URL + encrypted credentials above.'}</p>
+          <p>{connectionMode === 'source' ? 'This saves an unverified connection, not a working feed. A gateway on the camera’s network must test the password and convert video for this website. Connection settings are encrypted in Supabase Vault.' : 'Use an HTTPS feed or gateway that converts IP camera video to HLS or MJPEG. H.264 video is recommended. To store a raw camera URL and password securely, choose IP camera URL + encrypted credentials above.'}</p>
           {connectionMode === 'source' ? <CameraSourceFields/> : <label>
             HTTPS playback URL
             <input name="url" type="url" required maxLength={2048} />

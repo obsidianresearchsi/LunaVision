@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase, workspaceEnabled } from '../services/supabase';
+import {cameraConnectionLabel,useCameraConnectionStates} from '../services/cameraGateway';
 import {
   AlertNotifyCategory,
   CameraIntelSettings,
@@ -14,7 +15,7 @@ interface CameraRecord {
   id: string;
   name: string;
   location: string;
-  playback_url: string;
+  playback_url: string | null;
 }
 
 const DAY_LABELS = [
@@ -50,6 +51,7 @@ export const CameraControlCenter: React.FC<{
   onRefreshAccess?: () => Promise<void>;
 }> = ({ workspaceId, agency = false, role = 'member', platformAdmin = false, initialCameraId = null, onChanged, onManageCameras, onRefreshAccess }) => {
   const canConfigure = roleCan(role, 'configure', platformAdmin);
+  const connections=useCameraConnectionStates(workspaceId);
   const [cameras, setCameras] = useState<CameraRecord[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [features, setFeatures] = useState<WorkspaceFeatureMap>(() => defaultFeatureMap(agency));
@@ -243,7 +245,7 @@ export const CameraControlCenter: React.FC<{
           <p className="lv-eyebrow">Camera Intelligence</p>
           <h3>Alert thresholds, schedule &amp; notification triggers</h3>
           <p className="lv-muted">
-            Core AI detection pipelines run automatically per camera. Adjust thresholds, operating hours, and alert
+            Detection requires a connected feed to be open and playing. Adjust thresholds, operating hours, and alert
             notifications here.
           </p>
         </div>
@@ -281,6 +283,9 @@ export const CameraControlCenter: React.FC<{
           Read-only view: Only workspace owners and administrators can modify per-camera intelligence settings.
         </p>
       )}
+      <p className="lv-notice" role="status">
+        {selectedCamera?.playback_url ? 'Playback is configured. Detection requires the feed to be open and playing; saving settings alone does not start analysis.' : connections.unavailable?'Gateway status could not be loaded. Use Manage cameras to check the connection.':cameraConnectionLabel(connections.states[selectedCameraId]?.state)+' Use Manage cameras to open the feed, edit credentials or remove this camera.'}
+      </p>
       {error && <p className="lv-error" role="alert">{error}</p>}
       {notice && <p className="lv-notice">{notice}</p>}
 

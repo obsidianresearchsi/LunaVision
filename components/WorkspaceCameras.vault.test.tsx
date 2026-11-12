@@ -20,14 +20,14 @@ describe('Encrypted camera registration',()=>{
   }));
   host=document.createElement('div');document.body.append(host);root=createRoot(host);
   await act(async()=>root!.render(<WorkspaceCameras workspaceId="workspace-id" canAdd agency={false} role="owner"/>));
-  const form=host.querySelector('form')!;
+  const form=host.querySelector('form[aria-label="Register a camera"]')!;
   await act(async()=>Array.from(form.querySelectorAll('button')).find(button=>button.textContent==='Select test location')!.click());
   (form.querySelector('[name=name]') as HTMLInputElement).value='IP camera';
   (form.querySelector('[name=source_url]') as HTMLInputElement).value='rtsp://192.0.2.10:554/live';
   await act(async()=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
   expect(update).toHaveBeenCalledWith({latitude:6.45,longitude:3.39});
   expect(filters).toEqual([['workspace_id','workspace-id'],['id','camera-id']]);
-  expect(mock.rpc).toHaveBeenCalledTimes(1);
+  expect(mock.rpc.mock.calls.filter(call=>call[0]==='lv_register_camera_source')).toHaveLength(1);
   expect(form.textContent).not.toContain('private database details');
   if(locationFails)expect(form.querySelector('[role=alert]')?.textContent).toContain('do not register it again');
   else expect(form.querySelector('[role=status]')?.textContent).toContain('Camera source saved');
@@ -38,7 +38,7 @@ describe('Encrypted camera registration',()=>{
   mock.from.mockImplementation(()=>({select:()=>({eq:()=>({order:()=>Promise.resolve({data:[],error:null})})})}));
   host=document.createElement('div');document.body.append(host);root=createRoot(host);
   await act(async()=>root!.render(<WorkspaceCameras workspaceId="workspace-id" canAdd agency={false} role="owner"/>));
-  const form=host.querySelector('form')!;
+  const form=host.querySelector('form[aria-label="Register a camera"]')!;
   (form.querySelector('[name=name]') as HTMLInputElement).value='Real IP camera';
   (form.querySelector('[name=source_url]') as HTMLInputElement).value='rtsp://192.0.2.10:554/live';
   await act(async()=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
@@ -52,7 +52,7 @@ describe('Encrypted camera registration',()=>{
   host=document.createElement('div');document.body.append(host);root=createRoot(host);
   await act(async()=>root!.render(<WorkspaceCameras workspaceId="workspace-id" canAdd agency={false} role="owner"/>));
   await act(async()=>{const mode=host!.querySelector('select')!;mode.value='playback';mode.dispatchEvent(new Event('change',{bubbles:true}));});
-  const form=host.querySelector('form')!;(form.querySelector('[name=name]') as HTMLInputElement).value='IP camera';
+  const form=host.querySelector('form[aria-label="Register a camera"]')!;(form.querySelector('[name=name]') as HTMLInputElement).value='IP camera';
   (form.querySelector('[name=url]') as HTMLInputElement).value='rtsp://user:secret@192.0.2.10:554/live';
   await act(async()=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
   expect(mock.rpc).toHaveBeenCalledWith('lv_register_camera_source',expect.objectContaining({source_url:'rtsp://192.0.2.10:554/live',source_username:'user',source_password:'secret'}));
@@ -75,7 +75,7 @@ describe('Encrypted camera registration',()=>{
   await act(async()=>root!.render(<WorkspaceCameras workspaceId="workspace-id" canAdd agency={false} role="owner"/>));
   const mode=host.querySelector('select')!;
   await act(async()=>{mode.value='source';mode.dispatchEvent(new Event('change',{bubbles:true}));});
-  const form=host.querySelector('form')!;
+  const form=host.querySelector('form[aria-label="Register a camera"]')!;
   const set=(name:string,value:string)=>{(form.querySelector(`[name="${name}"]`) as HTMLInputElement).value=value;};
   set('name','North gate');set('location','Gate');set('source_url','rtsp://192.168.1.50:554/live');set('source_username','qa-user');set('source_password','qa-password');
   expect(form.querySelector('[name="source_password"]')?.getAttribute('type')).toBe('password');

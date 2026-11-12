@@ -1,10 +1,12 @@
 import { PGlite } from '@electric-sql/pglite';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 const db=new PGlite();
 const owner='10000000-0000-4000-8000-000000000001', staff='10000000-0000-4000-8000-000000000002', other='10000000-0000-4000-8000-000000000003';
 async function as(user,sql){await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${user}',false);`);try{return await db.query(sql);}finally{await db.exec("reset role; select set_config('request.jwt.claim.sub','',false);");}}
 async function denied(user,sql){await assert.rejects(()=>as(user,sql),'Expected rejection for '+sql.split('(')[0]);}
+async function asGateway(sql){await db.exec('set role anon');try{return await db.query(sql);}finally{await db.exec('reset role');}}
 try{
  await db.exec(`create role anon;create role authenticated;create schema auth;create schema storage;
  create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
@@ -28,6 +30,9 @@ try{
  create function vault.create_secret(value text,secret_name text,description text) returns uuid language plpgsql as $$declare saved uuid;begin insert into vault.secrets(secret,name)values(value,secret_name)returning id into saved;return saved;end $$;
  create function vault.update_secret(target uuid,value text) returns void language sql as $$update vault.secrets set secret=value where id=target$$;`);
  await db.exec(await readFile(new URL('../supabase/migrations/202611120007_camera_vault.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611130010_camera_management.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611130011_site_camera_gateways.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/202611130012_gateway_endpoint.sql',import.meta.url),'utf8'));
  const business=(await as(owner,"select lv_create_business('Saved business') as id")).rows[0].id;
  assert.equal((await as(owner,"select lv_create_business('Do not duplicate') as id")).rows[0].id,business);
  assert.equal((await as(owner,"select count(*)::int as n from lv_workspaces where kind='business'")).rows[0].n,1);
@@ -76,8 +81,48 @@ try{
  const gateway=(await db.query(`select lv_camera_source_for_gateway('${sourceCamera}') as config`)).rows[0].config;
  await db.exec('reset role');
  assert.equal(gateway.connection.password,'replacement-password');assert.equal(gateway.source_revision,2);
+ const siteToken='a'.repeat(64),siteHash=createHash('sha256').update(siteToken).digest('hex');
+ await denied(staff,`select lv_pair_camera_gateway('${business}','Unauthorized gateway','http://127.0.0.1:8787','${siteHash}')`);
+ const site=(await as(owner,`select lv_pair_camera_gateway('${business}','Test site gateway','http://127.0.0.1:8787','${siteHash}') as id`)).rows[0].id;
+ await denied(owner,'select token_hash from lv_camera_gateways');
+ await denied(owner,`select lv_gateway_sources('${siteToken}',null)`);
+ await assert.rejects(()=>asGateway(`select lv_gateway_heartbeat('${'b'.repeat(64)}')`));
+ await asGateway(`select lv_gateway_heartbeat('${siteToken}')`);
+ const assigned=(await asGateway(`select lv_gateway_sources('${siteToken}',null) as source`)).rows.map(row=>row.source);
+ assert.equal(assigned.length,1);assert.equal(assigned[0].camera_id,sourceCamera);assert.equal(assigned[0].connection.password,'replacement-password');
+ const revisionBeforeHealth=(await db.query(`select revision from lv_cameras where id='${sourceCamera}'`)).rows[0].revision;
+ await asGateway(`select lv_gateway_report_camera('${siteToken}','${sourceCamera}',2,'authentication_failed',null)`);
+ assert.equal((await as(owner,`select state from lv_camera_connection_states('${business}') where camera_id='${sourceCamera}'`)).rows[0].state,'authentication_failed');
+ assert.equal((await db.query(`select revision from lv_cameras where id='${sourceCamera}'`)).rows[0].revision,revisionBeforeHealth,'Health updates do not invalidate camera edits');
+ const ticket=(await as(staff,`select lv_open_camera_stream('${sourceCamera}') as access`)).rows[0].access;
+ assert.equal((await asGateway(`select lv_gateway_validate_playback('${siteToken}','${sourceCamera}',2,'${ticket.ticket}') as allowed`)).rows[0].allowed,true);
+ await denied(other,`select lv_open_camera_stream('${sourceCamera}')`);
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','viewer',1,array['records'])`);
+ assert.equal((await asGateway(`select lv_gateway_validate_playback('${siteToken}','${sourceCamera}',2,'${ticket.ticket}') as allowed`)).rows[0].allowed,false,'Playback rechecks revoked module access');
+ await as(owner,`select lv_set_staff_access('${business}','staff@example.com','viewer',1,array['monitor','records'])`);
+ await db.exec(`update lv_camera_playback_tickets set expires_at=now()-interval '1 second'`);
+ assert.equal((await asGateway(`select lv_gateway_validate_playback('${siteToken}','${sourceCamera}',2,'${ticket.ticket}') as allowed`)).rows[0].allowed,false,'Expired tickets cannot stream');
+ const freshTicket=(await as(staff,`select lv_open_camera_stream('${sourceCamera}') as access`)).rows[0].access;
+ await denied(staff,`select lv_update_gateway_endpoint('${site}','https://new-gateway.example')`);
+ await as(owner,`select lv_update_gateway_endpoint('${site}','https://new-gateway.example')`);
+ assert.equal((await asGateway(`select lv_gateway_validate_playback('${siteToken}','${sourceCamera}',2,'${freshTicket.ticket}') as allowed`)).rows[0].allowed,false,'Changing the public origin invalidates old tickets');
+ await as(owner,`select lv_disable_camera_gateway('${site}')`);
+ await assert.rejects(()=>asGateway(`select lv_gateway_validate_playback('${siteToken}','${sourceCamera}',2,'${freshTicket.ticket}')`));
+ await denied(staff,`select lv_assign_camera_gateway('${sourceCamera}',${revisionBeforeHealth},null)`);
  const secretId=(await db.query(`select secret_id from lv_camera_source_secrets where camera_id='${sourceCamera}'`)).rows[0].secret_id;
- await db.query(`delete from lv_cameras where id='${sourceCamera}'`);
+ const sourceRevision=(await db.query(`select revision from lv_cameras where id='${sourceCamera}'`)).rows[0].revision;
+ await as(owner,`select lv_configure_camera_connection('${sourceCamera}',${sourceRevision},'Corrected IP camera','Gate',null,'hls',0)`);
+ assert.equal((await as(owner,`select playback_url from lv_cameras where id='${sourceCamera}'`)).rows[0].playback_url,null,'Pending cameras can be edited without a fake endpoint');
+ const removalRevision=(await db.query(`select revision from lv_cameras where id='${sourceCamera}'`)).rows[0].revision;
+ const retainedObservation=(await db.query(`insert into lv_video_observations(workspace_id,camera_id,source,frame_seconds,summary,created_by) values('${business}','${sourceCamera}','camera',0,'Retained camera observation','${owner}') returning id`)).rows[0].id;
+ await denied(owner,`select lv_remove_camera('${sourceCamera}',${sourceRevision})`);
+ await denied(staff,`select lv_remove_camera('${sourceCamera}',${removalRevision})`);
+ await denied(other,`select lv_remove_camera('${sourceCamera}',${removalRevision})`);
+ await denied(staff,`select lv_configure_camera_connection('${sourceCamera}',${removalRevision},'Unauthorized','Gate',null,'hls',0)`);
+ await as(owner,`select lv_remove_camera('${sourceCamera}',${removalRevision})`);
+ assert.equal((await db.query(`select count(*)::int as n from lv_cameras where id='${sourceCamera}'`)).rows[0].n,0,'Manager removal deletes the camera');
+ assert.equal((await db.query(`select camera_id from lv_video_observations where id='${retainedObservation}'`)).rows[0].camera_id,null,'Removal retains saved observations');
+ assert.equal((await db.query(`select count(*)::int as n from lv_workspace_activity where subject_id='${sourceCamera}' and action='camera.removed'`)).rows[0].n,1,'Removal leaves an audit record');
  assert.equal((await db.query(`select count(*)::int as n from vault.secrets where id='${secretId}'`)).rows[0].n,0,'Camera deletion cleans up the Vault secret');
  const camera=(await db.query(`select id from lv_cameras where name='Restricted gate'`)).rows[0].id;
  await denied(staff,`select lv_update_agency_camera('${camera}',1,'Hidden edit','','https://camera.example/live.mp4')`);

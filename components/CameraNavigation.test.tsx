@@ -26,9 +26,10 @@ describe('Camera registration navigation',()=>{
     expect(host.querySelector('form[aria-label="Register a camera"]')).not.toBeNull();
     expect(host.querySelector('[name=name]')).not.toBeNull();
     expect(host.textContent).toContain('Register camera');
-    const scroll=vi.fn();Object.defineProperty(host.querySelector('form'),'scrollIntoView',{value:scroll,configurable:true});
+    const registration=host.querySelector('form[aria-label="Register a camera"]')!;
+    const scroll=vi.fn();Object.defineProperty(registration,'scrollIntoView',{value:scroll,configurable:true});
     await act(async()=>Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='Add camera')!.click());
-    expect(scroll).toHaveBeenCalledOnce();expect(document.activeElement).toBe(host.querySelector('[name=name]'));
+    expect(scroll).toHaveBeenCalledOnce();expect(document.activeElement).toBe(registration.querySelector('[name=name]'));
   });
   it('explains view-only access without offering camera creation',async()=>{
     await act(async()=>root.render(<CameraControlCenter workspaceId="business" role="viewer" onManageCameras={vi.fn()}/>));
