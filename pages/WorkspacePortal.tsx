@@ -20,6 +20,9 @@ import WorkspaceObservations from '../components/WorkspaceObservations';
 import VideoAnalysis from '../components/VideoAnalysis';
 import AgencyOperations from '../components/AgencyOperations';
 import SubjectEnrollmentCenter from '../components/SubjectEnrollmentCenter';
+import PeopleWatchlist from '../components/PeopleWatchlist';
+import CrawlerManager from '../components/CrawlerManager';
+import CrawledFacesGallery from '../components/CrawledFacesGallery';
 import LiveAlertPopupHost from '../components/LiveAlertPopup';
 import { subscribeAlertsChanged } from '../services/liveAlertBus';
 import { defaultFeatureMap, WorkspaceFeatureMap } from '../services/videoIntelligence';
@@ -695,6 +698,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           ['gallery', 'Gallery search'],
           ...(features.biometric_enrollment ? [['enrollment', 'Enroll subject']] : []),
           ['dossiers', 'Subject dossiers'],
+          ['watchlist', 'Watchlist'],
           ...(features.face_search ? [['search_history', 'Search history']] : []),
           ['history', 'Detection history'],
         ]
@@ -703,6 +707,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       ? [
           ['access', 'Access & audit'],
           ['officers', 'Officer management'],
+          ['crawler', 'Web crawler'],
+          ['crawled_faces', 'Crawled faces'],
         ]
       : []),
     ['password', 'Change password'],
@@ -832,17 +838,6 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       ],
     },
   ];
-
-  const pendingPages: Record<string, { title: string; detail: string }> = {
-    crawler: {
-      title: 'Web crawler',
-      detail: 'Face collection and biometric indexing from websites are unavailable in this agency console. Use Enroll subject to ingest authorized criminal dossiers and agency photo datasets.',
-    },
-    crawled_faces: {
-      title: 'Crawled faces',
-      detail: 'No face-collection crawler is enabled. This page does not contain a web-scraped biometric gallery; open Enroll subject for authorized biometric records.',
-    },
-  };
 
   const content = (
     <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
@@ -1332,18 +1327,36 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     }}
                   />
                 )}
-                {!platformView && isMember && agency && pendingPages[panel] && (
-                  <section className="lv-card">
-                    <h2>{pendingPages[panel].title}</h2>
-                    <p role="status">{pendingPages[panel].detail}</p>
-                    <button type="button" onClick={() => navigate('playback')}>
-                      Open playback and analysis
-                    </button>
-                  </section>
+                {!platformView && isMember && agency && panel === 'crawler' && canManage && (
+                  <CrawlerManager
+                    key={account + selected + 'crawler'}
+                    workspaceId={selected}
+                    role={membership?.role}
+                    platformAdmin={platformView && admin}
+                    onOpenCrawledFaces={() => navigate('crawled_faces')}
+                  />
                 )}
-                {!platformView && isMember && agency && ['vehicles', 'watchlist'].includes(panel) && (
+                {!platformView && isMember && agency && panel === 'crawled_faces' && canManage && (
+                  <CrawledFacesGallery
+                    key={account + selected + 'crawled_faces'}
+                    workspaceId={selected}
+                    role={membership?.role}
+                    platformAdmin={platformView && admin}
+                    onOpenCrawler={() => navigate('crawler')}
+                    onOpenWatchlist={() => navigate('watchlist')}
+                  />
+                )}
+                {!platformView && isMember && agency && panel === 'vehicles' && (
                   <VehicleWatchlist
                     key={account + selected}
+                    workspaceId={selected}
+                    role={membership?.role}
+                    platformAdmin={platformView && admin}
+                  />
+                )}
+                {!platformView && isMember && agency && panel === 'watchlist' && (
+                  <PeopleWatchlist
+                    key={account + selected + 'watchlist'}
                     workspaceId={selected}
                     role={membership?.role}
                     platformAdmin={platformView && admin}

@@ -765,5 +765,176 @@ describe('Video Intelligence UI Workflows', () => {
     expect(host.querySelector<HTMLSelectElement>('select[name="role"]')?.value).toBe('investigator');
     expect(host.querySelector<HTMLSelectElement>('select[name="clearance"]')?.value).toBe('1');
   });
+
+  it('PeopleWatchlist displays active watchlisted people, adds a person to watchlist, and switches to Vehicle Watchlist', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_agency_subjects') {
+        return makeChain([
+          {
+            id: 'wp-1',
+            subject_code: 'WL-2026-881',
+            full_name: 'Suleiman Bello',
+            aliases: 'Sule',
+            category: 'wanted',
+            threat_level: 'critical',
+            offense_summary: 'Kidnapping & armed robbery suspect',
+            warrant_reference: 'WR-909',
+            case_reference: 'CR-77',
+            last_known_location: 'Abuja Central',
+            status: 'active',
+            primary_photo_path: null,
+            face_token: null,
+            face_indexed: false,
+            created_at: '2026-11-12T10:00:00Z',
+            created_by_label: 'admin@agency.gov.ng',
+          },
+        ]);
+      }
+      return makeChain([]);
+    });
+    mockRpc.mockResolvedValue({ data: { id: 'wp-new-2' }, error: null });
+
+    const { default: PeopleWatchlist } = await import('./PeopleWatchlist');
+    await act(async () => {
+      root.render(<PeopleWatchlist workspaceId="ws-ag" role="admin" />);
+    });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+
+    expect(host.textContent).toContain('People Watchlist (1)');
+    expect(host.textContent).toContain('Suleiman Bello');
+    expect(host.textContent).toContain('WR-909');
+
+    const form = host.querySelector('form')!;
+    host.querySelector<HTMLInputElement>('input[name="full_name"]')!.value = 'Bala Musa';
+    host.querySelector<HTMLSelectElement>('select[name="category"]')!.value = 'suspect';
+    host.querySelector<HTMLInputElement>('input[name="warrant_reference"]')!.value = 'WR-2026-109';
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'lv_upsert_agency_subject',
+      expect.objectContaining({
+        target: 'ws-ag',
+        entry: expect.objectContaining({
+          full_name: 'Bala Musa',
+          category: 'suspect',
+          warrant_reference: 'WR-2026-109',
+        }),
+      }),
+    );
+
+    // Switch to Vehicle Watchlist tab inside Watchlist
+    const vehBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.textContent?.includes('Vehicle Watchlist (ANPR)'),
+    )!;
+    await act(async () => {
+      vehBtn.click();
+    });
+    for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Vehicle Watchlist & ANPR Alerts');
+  });
+
+  it('CrawlerManager scans target URL via /api/web-crawler and CrawledFacesGallery lists & promotes crawled faces', async () => {
+    const originalFetch = globalThis.fetch;
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        source_url: 'https://news.example.org/wanted',
+        source_domain: 'news.example.org',
+        page_title: 'Wanted Notice',
+        candidates_found: 1,
+        images_checked: 1,
+        skipped_no_face: 0,
+        errors: 0,
+        faces: [
+          {
+            face_token: 'ftok_crawl_999',
+            face_indexed: true,
+            faceset_outer_id: 'lv_wsag',
+            quality_score: 88.5,
+            label: 'Crawled Suspect A',
+            image_url: 'https://news.example.org/a.jpg',
+            source_url: 'https://news.example.org/wanted',
+            source_domain: 'news.example.org',
+            page_title: 'Wanted Notice',
+            image_base64: pngBase64,
+            content_type: 'image/png',
+          },
+        ],
+      }),
+    ) as any;
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_agency_subjects') {
+        return makeChain([
+          {
+            id: 'cf-1',
+            subject_code: 'CRAWL-2026-AAA',
+            full_name: 'Crawled Suspect A',
+            category: 'person_of_interest',
+            threat_level: 'low',
+            offense_summary: 'OSINT capture',
+            last_known_location: 'Lagos',
+            notes: 'Source Page: https://news.example.org/wanted',
+            status: 'active',
+            primary_photo_path: 'ws-ag/crawled/a.jpg',
+            face_token: 'ftok_crawl_999',
+            face_indexed: true,
+            source_name: 'web_crawler:news.example.org',
+            created_at: '2026-11-12T10:00:00Z',
+            created_by_label: 'admin@agency.gov.ng',
+          },
+        ]);
+      }
+      return makeChain([]);
+    });
+    mockRpc.mockResolvedValue({ data: { id: 'cf-1' }, error: null });
+
+    try {
+      const { default: CrawlerManager } = await import('./CrawlerManager');
+      await act(async () => {
+        root.render(<CrawlerManager workspaceId="ws-ag" role="admin" />);
+      });
+      for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+
+      const textarea = host.querySelector<HTMLTextAreaElement>('textarea[name="seed_urls"]')!;
+      textarea.value = 'https://news.example.org/wanted';
+      await act(async () => {
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); });
+
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/web-crawler', expect.objectContaining({ method: 'POST' }));
+
+      const { default: CrawledFacesGallery } = await import('./CrawledFacesGallery');
+      await act(async () => {
+        root.render(<CrawledFacesGallery workspaceId="ws-ag" role="admin" />);
+      });
+      for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+
+      expect(host.textContent).toContain('OSINT Crawled Faces Archive');
+      expect(host.textContent).toContain('Crawled Suspect A');
+      expect(host.textContent).toContain('news.example.org');
+
+      const promoteBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.trim() === 'Promote to Wanted',
+      )!;
+      await act(async () => {
+        promoteBtn.click();
+      });
+      for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+      expect(mockRpc).toHaveBeenCalledWith(
+        'lv_upsert_agency_subject',
+        expect.objectContaining({
+          entry: expect.objectContaining({ id: 'cf-1', category: 'wanted', threat_level: 'high' }),
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 

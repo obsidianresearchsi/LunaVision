@@ -407,11 +407,28 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     await act(async () => { histBtn.click(); });
     expect(host.textContent).toContain('Forensic Face Search Audit History');
 
-    // Verify Web crawler remains explicitly unavailable (no non-consensual public web scraping)
+    // Verify production Web crawler and Crawled faces pages load live consoles
     const crawlerBtn = host.querySelector('button[aria-label="Web crawler"]') as HTMLButtonElement;
     expect(crawlerBtn).toBeTruthy();
     await act(async () => { crawlerBtn.click(); });
-    expect(host.textContent).toContain('Face collection and biometric indexing from websites are unavailable in this agency console.');
+    for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('OSINT Web Intelligence Crawler & Face Harvester');
+
+    const crawledBtn = host.querySelector('button[aria-label="Crawled faces"]') as HTMLButtonElement;
+    expect(crawledBtn).toBeTruthy();
+    await act(async () => { crawledBtn.click(); });
+    for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('OSINT Crawled Faces Archive');
+
+    // Verify Watchlist supports both People Watchlist (add + list) and Vehicle Watchlist
+    const watchlistBtn = host.querySelector('button[aria-label="Watchlist"]') as HTMLButtonElement;
+    expect(watchlistBtn).toBeTruthy();
+    await act(async () => { watchlistBtn.click(); });
+    for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Agency Watchlist Command');
+    expect(host.textContent).toContain('People Watchlist');
+    expect(host.textContent).toContain('Add Person to Watchlist');
+    expect(host.textContent).toContain('Vehicle Watchlist (ANPR)');
 
     // Verify Security Intelligence, Vehicle Registry, and Camera Intelligence panels work
     const intelBtn = host.querySelector('button[aria-label="Security intelligence"]') as HTMLButtonElement;
