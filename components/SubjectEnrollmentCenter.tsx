@@ -423,19 +423,25 @@ export default function SubjectEnrollmentCenter({
         source_name: 'manual',
       };
 
-      const { data: savedSubjectId, error: saveErr } = await supabase.rpc('lv_upsert_agency_subject', {
+      const { data: savedSubject, error: saveErr } = await supabase.rpc('lv_upsert_agency_subject', {
         target: workspaceId,
         entry: entryPayload,
         photos: uploadedPhotos,
       });
       if (saveErr) throw new Error(saveErr.message);
+      const savedSubjectId =
+        savedSubject && typeof savedSubject === 'object' && 'id' in savedSubject
+          ? String((savedSubject as { id: string }).id)
+          : typeof savedSubject === 'string'
+            ? savedSubject
+            : '';
       if (subjectLocation && savedSubjectId) {
         try {
           await supabase
             .from('lv_agency_subjects')
             .update({ latitude: subjectLocation.latitude, longitude: subjectLocation.longitude })
             .eq('workspace_id', workspaceId)
-            .eq('id', String(savedSubjectId));
+            .eq('id', savedSubjectId);
         } catch {
           // Live Postgres instances prior to migration 202611130002 store coordinates in last_known_location.
         }
@@ -1279,6 +1285,7 @@ export default function SubjectEnrollmentCenter({
                   <label>
                     Location / L.G.A / Custody Facility
                     <input
+                      key={`loc-${editingSubject?.id || 'new'}`}
                       name="last_known_location"
                       defaultValue={stripLocationCoords(editingSubject?.last_known_location || '')}
                       maxLength={240}

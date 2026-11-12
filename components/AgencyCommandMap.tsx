@@ -135,7 +135,7 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
         const nextLocation = formatLocationWithCoords(selected.rawLocation || selected.detail, { latitude, longitude });
         const { data: colData, error: colErr } = await supabase
           .from('lv_agency_subjects')
-          .update({ latitude, longitude, last_known_location: nextLocation })
+          .update({ latitude, longitude })
           .eq('workspace_id', workspaceId)
           .eq('id', selected.id)
           .select('id')
@@ -172,7 +172,7 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
         <option value="subject">Enrolled subjects</option>
         <option value="investigation">Investigations</option>
       </select></label>
-      {layer === 'investigation' && <label>Investigation status<select value={status} onChange={event => setStatus(event.target.value)}>
+      {(layer === 'all' || layer === 'investigation') && <label>Investigation status<select value={status} onChange={event => setStatus(event.target.value)}>
         <option value="all">All statuses</option>{Object.entries(statuses).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
       </select></label>}
       <div className="lv-video-actions">

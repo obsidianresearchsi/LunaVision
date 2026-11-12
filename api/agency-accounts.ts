@@ -68,7 +68,7 @@ export async function issueAgencyAccount(request: Request, env: Record<string, s
     if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(target) ||
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
         !['member','viewer','investigator','supervisor','admin'].includes(role) || input?.verified !== true ||
-        !Number.isInteger(clearance) || clearance < 0 || clearance > 3 || !Array.isArray(modules) || modules.length > 25 ||
+        !Number.isInteger(clearance) || clearance < 0 || clearance > 3 || !Array.isArray(modules) || modules.length === 0 || modules.length > 25 ||
         modules.some((value: unknown) => typeof value !== 'string' || !VALID_MODULE_IDS.has(value))) {
       return json(400, { error: 'Choose valid staff access and confirm that the recipient and email were verified.' });
     }

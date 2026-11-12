@@ -741,6 +741,14 @@ describe('Video Intelligence UI Workflows', () => {
     expect(modCheckboxes).not.toContain('officers');
     expect(modCheckboxes).not.toContain('configuration');
     expect(modCheckboxes).not.toContain('integrations');
+
+    // Clicking Edit access syncs existing role & clearance instead of downgrading to member/0
+    const editButtons = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).filter((b) => b.textContent?.trim() === 'Edit access');
+    await act(async () => {
+      editButtons[1].click();
+    });
+    expect(host.querySelector<HTMLSelectElement>('select[name="role"]')?.value).toBe('investigator');
+    expect(host.querySelector<HTMLSelectElement>('select[name="clearance"]')?.value).toBe('1');
   });
 });
 

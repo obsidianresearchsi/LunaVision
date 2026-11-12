@@ -29,4 +29,5 @@ describe('Staff account provisioning',()=>{
   expect(rpc).toHaveBeenNthCalledWith(1,'lv_set_staff_access',expect.objectContaining({modules:['command','cameras','gallery']}));
   expect(rpc).toHaveBeenNthCalledWith(2,'lv_set_staff_access',expect.objectContaining({modules:['monitor','records']}));
  });
+ it('rejects empty modules array',async()=>{setup();expect((await issueAgencyAccount(request({modules:[]}),env)).status).toBe(400);});
 });

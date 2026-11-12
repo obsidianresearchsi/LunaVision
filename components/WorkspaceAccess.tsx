@@ -87,7 +87,12 @@ function classifyAuditAction(action: string): {
   summary: string;
 } {
   const lower = action.toLowerCase();
-  if (lower.startsWith('membership.') || lower.startsWith('feature.')) {
+  if (
+    lower.startsWith('membership.') ||
+    lower.startsWith('feature.') ||
+    lower.includes('staff') ||
+    lower.includes('role')
+  ) {
     return {
       category: 'membership',
       badge: 'ACCESS / ROLE',
@@ -95,7 +100,7 @@ function classifyAuditAction(action: string): {
       summary: action.replace(/\./g, ' · ').replace(/_/g, ' '),
     };
   }
-  if (lower.startsWith('subject.')) {
+  if (lower.startsWith('subject.') || lower.includes('subject') || lower.includes('face')) {
     return {
       category: 'subject',
       badge: 'BIOMETRIC SUBJECT',
@@ -103,7 +108,7 @@ function classifyAuditAction(action: string): {
       summary: action.replace(/\./g, ' · ').replace(/_/g, ' '),
     };
   }
-  if (lower.startsWith('camera.') || lower.includes('rules')) {
+  if (lower.startsWith('camera.') || lower.includes('camera') || lower.includes('rules')) {
     return {
       category: 'camera',
       badge: 'CAMERA / RULES',
@@ -111,7 +116,12 @@ function classifyAuditAction(action: string): {
       summary: action.replace(/\./g, ' · ').replace(/_/g, ' '),
     };
   }
-  if (lower.startsWith('vehicle_watch.') || lower.startsWith('registry.') || lower.includes('evidence')) {
+  if (
+    lower.startsWith('vehicle_watch.') ||
+    lower.startsWith('registry.') ||
+    lower.includes('vehicle') ||
+    lower.includes('evidence')
+  ) {
     return {
       category: 'watchlist',
       badge: 'WATCHLIST / EVIDENCE',
@@ -143,6 +153,8 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
   const [staff, setStaff] = useState<{ user_id: string; email: string; role: string; clearance: number; allowed_modules: string[] }[]>([]);
   const [createAccount, setCreateAccount] = useState(viewMode === 'officers');
   const [selectedEmail, setSelectedEmail] = useState('');
+  const [selectedRole, setSelectedRole] = useState('member');
+  const [selectedClearance, setSelectedClearance] = useState(0);
   const [selectedModules, setSelectedModules] = useState<string[]>(() =>
     isBusiness ? ['overview', 'cameras', 'alerts'] : ['command', 'cameras', 'alerts', 'records'],
   );
@@ -218,7 +230,8 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
   }, [staff, staffQuery]);
 
   const totalStaffPages = Math.max(1, Math.ceil(filteredStaff.length / PERSONNEL_PAGE_SIZE));
-  const pagedStaff = filteredStaff.slice(staffPage * PERSONNEL_PAGE_SIZE, (staffPage + 1) * PERSONNEL_PAGE_SIZE);
+  const safeStaffPage = Math.min(staffPage, totalStaffPages - 1);
+  const pagedStaff = filteredStaff.slice(safeStaffPage * PERSONNEL_PAGE_SIZE, (safeStaffPage + 1) * PERSONNEL_PAGE_SIZE);
 
   const filteredActivity = useMemo(() => {
     const q = auditQuery.trim().toLowerCase();
@@ -233,7 +246,8 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
   }, [activity, auditCategory, auditQuery, staffById]);
 
   const totalAuditPages = Math.max(1, Math.ceil(filteredActivity.length / AUDIT_PAGE_SIZE));
-  const pagedActivity = filteredActivity.slice(auditPage * AUDIT_PAGE_SIZE, (auditPage + 1) * AUDIT_PAGE_SIZE);
+  const safeAuditPage = Math.min(auditPage, totalAuditPages - 1);
+  const pagedActivity = filteredActivity.slice(safeAuditPage * AUDIT_PAGE_SIZE, (safeAuditPage + 1) * AUDIT_PAGE_SIZE);
 
   async function saveStaffPermissions(emailAddress: string, accessRole: string, accessClearance: number, chosenPages: string[]) {
     const modulesToSave = chosenPages.length > 0 ? chosenPages : [sidebarModules[0]?.id || 'monitor'];
@@ -266,6 +280,9 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
     setNotice('');
     setSetupLink('');
     try {
+      if (!settings && selectedRole !== 'revoke' && selectedModules.length === 0) {
+        throw new Error('Select at least one allowed sidebar page for this account.');
+      }
       if (!settings && createAccount) {
         const { data } = await supabase.auth.getSession();
         if (!data.session) throw new Error('Sign in again to create a staff account.');
@@ -275,8 +292,8 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
           body: JSON.stringify({
             workspaceId: workspace.id,
             email: selectedEmail || fields.get('email'),
-            role: fields.get('role'),
-            clearance: Number(fields.get('clearance')),
+            role: selectedRole,
+            clearance: selectedClearance,
             modules: selectedModules,
             verified: fields.has('verified'),
           }),
@@ -305,12 +322,14 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
       } else {
         await saveStaffPermissions(
           String(selectedEmail || fields.get('email')),
-          String(fields.get('role')),
-          Number(fields.get('clearance')),
+          selectedRole,
+          selectedClearance,
           selectedModules,
         );
         form.reset();
         setSelectedEmail('');
+        setSelectedRole('member');
+        setSelectedClearance(0);
         setNotice('Personnel access, clearance & allowed pages updated.');
       }
       setVersion((previous) => previous + 1);
@@ -436,7 +455,7 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
                   </label>
                   <label>
                     Role
-                    <select name="role" defaultValue="member">
+                    <select name="role" value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)}>
                       <option value="member">Personnel / Member (view &amp; acknowledge alerts)</option>
                       <option value="viewer">Viewer (read-only)</option>
                       <option value="investigator">Investigator (watchlist add/edit &amp; resolve alerts)</option>
@@ -447,7 +466,7 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
                   </label>
                   <label>
                     Clearance
-                    <select name="clearance" defaultValue="0">
+                    <select name="clearance" value={String(selectedClearance)} onChange={(e) => setSelectedClearance(Number(e.target.value))}>
                       <option value="0">0 · General</option>
                       <option value="1">1 · Internal</option>
                       <option value="2">2 · Restricted</option>
@@ -577,6 +596,8 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
                         onClick={() => {
                           setCreateAccount(false);
                           setSelectedEmail(member.email);
+                          setSelectedRole(member.role === 'owner' ? 'admin' : member.role || 'member');
+                          setSelectedClearance(Number(member.clearance ?? 0));
                           setSelectedModules(
                             Array.isArray(member.allowed_modules) && member.allowed_modules.length > 0
                               ? member.allowed_modules
@@ -598,18 +619,18 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
                   <button
                     type="button"
                     className="lv-secondary"
-                    disabled={staffPage === 0}
+                    disabled={safeStaffPage === 0}
                     onClick={() => setStaffPage((p) => Math.max(0, p - 1))}
                   >
                     Previous
                   </button>
                   <span>
-                    Page {staffPage + 1} of {totalStaffPages}
+                    Page {safeStaffPage + 1} of {totalStaffPages}
                   </span>
                   <button
                     type="button"
                     className="lv-secondary"
-                    disabled={staffPage + 1 >= totalStaffPages}
+                    disabled={safeStaffPage + 1 >= totalStaffPages}
                     onClick={() => setStaffPage((p) => p + 1)}
                   >
                     Next
@@ -763,18 +784,18 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
               <button
                 type="button"
                 className="lv-secondary"
-                disabled={auditPage === 0}
+                disabled={safeAuditPage === 0}
                 onClick={() => setAuditPage((p) => Math.max(0, p - 1))}
               >
                 Previous
               </button>
               <span>
-                Page {auditPage + 1} of {totalAuditPages} ({filteredActivity.length} total logs)
+                Page {safeAuditPage + 1} of {totalAuditPages} ({filteredActivity.length} total logs)
               </span>
               <button
                 type="button"
                 className="lv-secondary"
-                disabled={auditPage + 1 >= totalAuditPages}
+                disabled={safeAuditPage + 1 >= totalAuditPages}
                 onClick={() => setAuditPage((p) => p + 1)}
               >
                 Next

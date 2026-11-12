@@ -12,8 +12,9 @@ alter table public.lv_agency_subjects add constraint lv_subject_coordinates chec
 );
 
 grant insert(latitude, longitude) on public.lv_cameras to authenticated;
-grant update(latitude, longitude) on public.lv_agency_subjects to authenticated;
+grant update(latitude, longitude, last_known_location) on public.lv_agency_subjects to authenticated;
 
+drop policy if exists lv_subject_map_position on public.lv_agency_subjects;
 create policy lv_subject_map_position on public.lv_agency_subjects for update to authenticated using (
   public.lv_agency_member(workspace_id)
   and public.lv_workspace_permission(workspace_id, 'watchlist_write')
