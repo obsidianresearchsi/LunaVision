@@ -102,8 +102,10 @@ describe('Video Intelligence UI Workflows', () => {
     });
 
     expect(host.textContent).toContain('North Gate — Entrance');
-    // ANPR should not be rendered for business workspace
-    expect(host.textContent).not.toContain('Automatic Number Plate Recognition (ANPR)');
+    expect(host.textContent).not.toContain('Modular Detection & Analytics Controls');
+    expect(host.textContent).not.toContain('Visual Camera-Zone & Virtual Boundary Editor');
+    // Watchlist ANPR trigger should not be rendered for business workspace
+    expect(host.textContent).not.toContain('Security watchlist plate match');
 
     const saveBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
       b.textContent?.includes('Save camera settings'),

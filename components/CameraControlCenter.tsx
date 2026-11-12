@@ -1,14 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { supabase, workspaceEnabled } from '../services/supabase';
 import {
   AlertNotifyCategory,
-  CAPABILITY_CATALOG,
   CameraIntelSettings,
-  CameraZone,
-  CapabilityKey,
-  SensitivityLevel,
   WorkspaceFeatureMap,
-  ZoneKind,
   defaultCameraIntelSettings,
   defaultFeatureMap,
   normalizeCameraIntelSettings,
@@ -31,34 +26,6 @@ const DAY_LABELS = [
   { day: 5, label: 'Fri' },
   { day: 6, label: 'Sat' },
 ];
-
-const ZONE_KIND_LABELS: Record<ZoneKind, { label: string; color: string; hint: string }> = {
-  count_line: {
-    label: 'Virtual Count Line (2 pts)',
-    color: '#38bdf8',
-    hint: 'Click 2 points to define an entry/exit boundary line.',
-  },
-  area: {
-    label: 'Occupancy Area (Polygon)',
-    color: '#22c55e',
-    hint: 'Click 3 or more points to outline a monitored occupancy area, then click "Complete zone".',
-  },
-  restricted: {
-    label: 'Restricted Intrusion Zone',
-    color: '#ef4444',
-    hint: 'Click 3 or more points to outline a restricted area that triggers intrusion alerts.',
-  },
-  perimeter: {
-    label: 'Perimeter Boundary Zone',
-    color: '#f59e0b',
-    hint: 'Click 3 or more points to outline a perimeter zone.',
-  },
-  parking: {
-    label: 'Parking / Stationary Zone',
-    color: '#a855f7',
-    hint: 'Click 3 or more points to outline a parking or vehicle-dwell zone.',
-  },
-};
 
 const NOTIFY_LABELS: { key: AlertNotifyCategory; label: string; agencyOnly?: boolean }[] = [
   { key: 'intrusion', label: 'Restricted-area intrusion' },
@@ -94,13 +61,6 @@ export const CameraControlCenter: React.FC<{
   const [refreshingAccess, setRefreshingAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  // Interactive zone drawing state
-  const [draftName, setDraftName] = useState('Main Gate');
-  const [draftKind, setDraftKind] = useState<ZoneKind>('count_line');
-  const [draftDirection, setDraftDirection] = useState<'down' | 'up' | 'right' | 'left'>('down');
-  const [draftPoints, setDraftPoints] = useState<[number, number][]>([]);
-  const overlayRef = useRef<SVGSVGElement | null>(null);
 
   const selectedCamera = cameras.find((c) => c.id === selectedCameraId) || null;
 
@@ -155,7 +115,6 @@ export const CameraControlCenter: React.FC<{
       if (!selectedCameraId || !workspaceEnabled) return;
       setError(null);
       setNotice(null);
-      setDraftPoints([]);
       const { data, error: fetchError } = await supabase
         .from('lv_camera_intel_settings')
         .select('settings, revision')
@@ -179,28 +138,6 @@ export const CameraControlCenter: React.FC<{
       active = false;
     };
   }, [selectedCameraId, agency, features]);
-
-  const toggleCapability = (key: CapabilityKey, enabled: boolean) => {
-    if (!canConfigure) return;
-    setSettings((prev) => ({
-      ...prev,
-      capabilities: {
-        ...prev.capabilities,
-        [key]: { ...prev.capabilities[key], enabled },
-      },
-    }));
-  };
-
-  const changeSensitivity = (key: CapabilityKey, sensitivity: SensitivityLevel) => {
-    if (!canConfigure) return;
-    setSettings((prev) => ({
-      ...prev,
-      capabilities: {
-        ...prev.capabilities,
-        [key]: { ...prev.capabilities[key], sensitivity },
-      },
-    }));
-  };
 
   const toggleScheduleDay = (day: number) => {
     if (!canConfigure) return;
@@ -229,63 +166,6 @@ export const CameraControlCenter: React.FC<{
         notify: { ...prev.notify, categories },
       };
     });
-  };
-
-  const handleOverlayClick = (event: React.MouseEvent<SVGSVGElement>) => {
-    if (!canConfigure || !overlayRef.current) return;
-    const rect = overlayRef.current.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const x = Number(Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)).toFixed(4));
-    const y = Number(Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)).toFixed(4));
-
-    if (draftKind === 'count_line') {
-      if (draftPoints.length === 1) {
-        const nextPoints: [number, number][] = [draftPoints[0], [x, y]];
-        commitDraftZone(nextPoints);
-      } else {
-        setDraftPoints([[x, y]]);
-      }
-    } else {
-      if (draftPoints.length < 32) {
-        setDraftPoints((prev) => [...prev, [x, y]]);
-      }
-    }
-  };
-
-  const commitDraftZone = (overridePoints?: [number, number][]) => {
-    const pts = overridePoints || draftPoints;
-    if (draftKind === 'count_line' && pts.length !== 2) {
-      setError('A virtual count line requires exactly 2 points.');
-      return;
-    }
-    if (draftKind !== 'count_line' && pts.length < 3) {
-      setError('A polygon zone requires at least 3 points.');
-      return;
-    }
-    const cleanName = draftName.trim().slice(0, 60) || `Zone ${settings.zones.length + 1}`;
-    const id = `zone_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-    const newZone: CameraZone = {
-      id,
-      name: cleanName,
-      kind: draftKind,
-      points: pts,
-      ...(draftKind === 'count_line' ? { direction: draftDirection } : {}),
-    };
-    setSettings((prev) => ({
-      ...prev,
-      zones: [...prev.zones, newZone].slice(0, 20),
-    }));
-    setDraftPoints([]);
-    setDraftName(`Zone ${settings.zones.length + 2}`);
-    setError(null);
-  };
-
-  const removeZone = (zoneId: string) => {
-    if (!canConfigure) return;
-    setSettings((prev) => ({
-      ...prev,
-      zones: prev.zones.filter((z) => z.id !== zoneId),
-    }));
   };
 
   const saveCameraConfiguration = async () => {
@@ -356,18 +236,15 @@ export const CameraControlCenter: React.FC<{
     );
   }
 
-  const visibleCatalog = CAPABILITY_CATALOG.filter(
-    (cap) => (!cap.agencyOnly || agency) && Boolean(features[cap.feature]),
-  );
-
   return (
     <section className="lv-panel" aria-label="Camera Intelligence & Control Center">
       <div className="lv-panel-head">
         <div>
-          <p className="lv-eyebrow">Camera Configuration & Control Center</p>
-          <h3>Per-camera detection, zones, schedules & alert thresholds</h3>
+          <p className="lv-eyebrow">Camera Intelligence</p>
+          <h3>Alert thresholds, schedule &amp; notification triggers</h3>
           <p className="lv-muted">
-            Settings are saved independently per camera. Changing one camera's configuration never affects other cameras.
+            Core AI detection pipelines run automatically per camera. Adjust thresholds, operating hours, and alert
+            notifications here.
           </p>
         </div>
         <div className="lv-filter-bar">
@@ -407,270 +284,9 @@ export const CameraControlCenter: React.FC<{
       {error && <p className="lv-error" role="alert">{error}</p>}
       {notice && <p className="lv-notice">{notice}</p>}
 
-      <p className="lv-notice">
-        Browser AI pipeline (active): People & vehicle detection/tracking, directional zone counting, occupancy, loitering, intrusion, perimeter, abandoned objects, camera tamper/health, and ANPR plate matching run in-browser when a camera feed is open. Continuous 24/7 headless analytics when no operator browser is open require an external inference gateway.
-      </p>
-
-      {/* 1. Modular Detection & Analytics Capabilities */}
+      {/* 1. Operating Schedule & Alert Thresholds */}
       <div style={{ marginTop: '1.25rem' }}>
-        <p className="lv-eyebrow">1. Modular Detection & Analytics Controls</p>
-        <p className="lv-muted">
-          Enable only the analytics relevant to this camera's location and adjust detection sensitivity independently.
-        </p>
-        <div className="lv-card-grid" style={{ marginTop: '0.75rem' }}>
-          {visibleCatalog.map((cap) => {
-            const state = settings.capabilities[cap.key] || { enabled: false, sensitivity: 'medium' };
-            return (
-              <article key={cap.key} className="lv-card">
-                <div className="lv-card-top">
-                  <label className="lv-inline-check" style={{ fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={state.enabled}
-                      disabled={!canConfigure}
-                      onChange={(e) => toggleCapability(cap.key, e.target.checked)}
-                    />
-                    <span>{cap.label}</span>
-                  </label>
-                  <span className="lv-badge">{cap.group.toUpperCase()}</span>
-                </div>
-                <p className="lv-muted" style={{ fontSize: '0.85rem', margin: '0.4rem 0' }}>
-                  {cap.description}
-                </p>
-                <div className="lv-card-actions" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                  <small className="lv-muted">Engine: {cap.engine}</small>
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem' }}>
-                    <span>Sensitivity</span>
-                    <select
-                      value={state.sensitivity}
-                      disabled={!canConfigure || !state.enabled}
-                      onChange={(e) => changeSensitivity(cap.key, e.target.value as SensitivityLevel)}
-                    >
-                      <option value="low">Low (strict)</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High (sensitive)</option>
-                    </select>
-                  </label>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 2. Interactive Visual Camera-Zone Editor */}
-      <div style={{ marginTop: '1.75rem' }}>
-        <p className="lv-eyebrow">2. Visual Camera-Zone & Virtual Boundary Editor</p>
-        <p className="lv-muted">
-          Click directly on the camera frame below to draw virtual counting lines, occupancy areas, restricted intrusion areas, perimeter boundaries, or parking zones.
-        </p>
-
-        <div className="lv-form-grid" style={{ marginTop: '0.75rem', alignItems: 'end' }}>
-          <label className="lv-field">
-            <span>Zone name</span>
-            <input
-              value={draftName}
-              disabled={!canConfigure}
-              onChange={(e) => setDraftName(e.target.value)}
-              placeholder="North Gate Line"
-            />
-          </label>
-          <label className="lv-field">
-            <span>Zone type</span>
-            <select
-              value={draftKind}
-              disabled={!canConfigure}
-              onChange={(e) => {
-                setDraftKind(e.target.value as ZoneKind);
-                setDraftPoints([]);
-              }}
-            >
-              {Object.entries(ZONE_KIND_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {draftKind === 'count_line' && (
-            <label className="lv-field">
-              <span>Entry direction</span>
-              <select
-                value={draftDirection}
-                disabled={!canConfigure}
-                onChange={(e) => setDraftDirection(e.target.value as 'down' | 'up' | 'right' | 'left')}
-              >
-                <option value="down">Top → Bottom is Entry (In)</option>
-                <option value="up">Bottom → Top is Entry (In)</option>
-                <option value="right">Left → Right is Entry (In)</option>
-                <option value="left">Right → Left is Entry (In)</option>
-              </select>
-            </label>
-          )}
-          <div className="lv-row-actions">
-            {draftKind !== 'count_line' && (
-              <button
-                type="button"
-                className="lv-btn lv-btn-primary"
-                disabled={!canConfigure || draftPoints.length < 3}
-                onClick={() => commitDraftZone()}
-              >
-                Complete zone ({draftPoints.length} pts)
-              </button>
-            )}
-            <button
-              type="button"
-              className="lv-btn lv-btn-secondary"
-              disabled={!canConfigure || draftPoints.length === 0}
-              onClick={() => setDraftPoints([])}
-            >
-              Clear draft
-            </button>
-          </div>
-        </div>
-
-        <p className="lv-muted" style={{ fontSize: '0.85rem', marginTop: '0.35rem' }}>
-          {ZONE_KIND_LABELS[draftKind].hint}
-        </p>
-
-        <div
-          className="lv-video-stage"
-          style={{
-            position: 'relative',
-            marginTop: '0.75rem',
-            minHeight: '300px',
-            background: '#090d16',
-            borderRadius: '12px',
-            overflow: 'hidden',
-            border: '1px solid rgba(148, 163, 184, 0.25)',
-          }}
-        >
-          {selectedCamera?.playback_url && (
-            <video
-              key={selectedCamera.playback_url}
-              src={selectedCamera.playback_url}
-              muted
-              playsInline
-              loop
-              autoPlay
-              crossOrigin="anonymous"
-              style={{ width: '100%', height: '320px', objectFit: 'cover', display: 'block', opacity: 0.78 }}
-            />
-          )}
-          <svg
-            ref={overlayRef}
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            onClick={handleOverlayClick}
-            aria-label="Interactive camera zone canvas"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              cursor: canConfigure ? 'crosshair' : 'default',
-            }}
-          >
-            {/* Saved zones */}
-            {settings.zones.map((z) => {
-              const meta = ZONE_KIND_LABELS[z.kind] || ZONE_KIND_LABELS.area;
-              if (z.kind === 'count_line' && z.points.length === 2) {
-                const [[x1, y1], [x2, y2]] = z.points;
-                return (
-                  <g key={z.id}>
-                    <line
-                      x1={x1 * 100}
-                      y1={y1 * 100}
-                      x2={x2 * 100}
-                      y2={y2 * 100}
-                      stroke={meta.color}
-                      strokeWidth="1.2"
-                      strokeDasharray="2,1"
-                    />
-                    <text x={(x1 + x2) * 50} y={(y1 + y2) * 50 - 2} fill={meta.color} fontSize="3.2" fontWeight="bold">
-                      {z.name} ({z.direction || 'down'})
-                    </text>
-                  </g>
-                );
-              }
-              const polyPoints = z.points.map(([px, py]) => `${px * 100},${py * 100}`).join(' ');
-              const [fx, fy] = z.points[0] || [0.1, 0.1];
-              return (
-                <g key={z.id}>
-                  <polygon
-                    points={polyPoints}
-                    fill={`${meta.color}33`}
-                    stroke={meta.color}
-                    strokeWidth="0.9"
-                  />
-                  <text x={fx * 100 + 1} y={fy * 100 + 4} fill={meta.color} fontSize="3.2" fontWeight="bold">
-                    {z.name}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Active draft points */}
-            {draftPoints.length > 0 && (
-              <g>
-                <polyline
-                  points={draftPoints.map(([px, py]) => `${px * 100},${py * 100}`).join(' ')}
-                  fill="none"
-                  stroke="#ffffff"
-                  strokeWidth="0.9"
-                  strokeDasharray="1.5,1.5"
-                />
-                {draftPoints.map(([px, py], idx) => (
-                  <circle key={idx} cx={px * 100} cy={py * 100} r="1.4" fill="#38bdf8" stroke="#fff" strokeWidth="0.4" />
-                ))}
-              </g>
-            )}
-          </svg>
-        </div>
-
-        {settings.zones.length > 0 && (
-          <div className="lv-table-wrap" style={{ marginTop: '0.75rem' }}>
-            <table className="lv-table">
-              <thead>
-                <tr>
-                  <th>Zone name</th>
-                  <th>Type</th>
-                  <th>Points / Direction</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {settings.zones.map((z) => (
-                  <tr key={z.id}>
-                    <td>{z.name}</td>
-                    <td>{ZONE_KIND_LABELS[z.kind]?.label || z.kind}</td>
-                    <td>
-                      {z.kind === 'count_line'
-                        ? `2 points · Entry: ${z.direction || 'down'}`
-                        : `${z.points.length} polygon vertices`}
-                    </td>
-                    <td>
-                      {canConfigure && (
-                        <button
-                          type="button"
-                          className="lv-btn lv-btn-secondary"
-                          onClick={() => removeZone(z.id)}
-                        >
-                          Remove zone
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* 3. Operating Schedule & Alert Thresholds */}
-      <div style={{ marginTop: '1.75rem' }}>
-        <p className="lv-eyebrow">3. Operating Schedule & Alert Thresholds</p>
+        <p className="lv-eyebrow">1. Alert Thresholds &amp; Operating Schedule</p>
         <div className="lv-form-grid" style={{ marginTop: '0.75rem' }}>
           <label className="lv-field">
             <span>Crowd concentration threshold (people)</span>
@@ -844,9 +460,9 @@ export const CameraControlCenter: React.FC<{
         </div>
       </div>
 
-      {/* 4. Event Notification Triggers */}
+      {/* 2. Event Notification Triggers */}
       <div style={{ marginTop: '1.5rem' }}>
-        <p className="lv-eyebrow">4. Alert & Notification Triggers</p>
+        <p className="lv-eyebrow">2. Alert &amp; Notification Triggers</p>
         <p className="lv-muted">Select which detected events on this camera should generate immediate workspace alerts.</p>
         <div className="lv-card-grid" style={{ marginTop: '0.6rem' }}>
           {NOTIFY_LABELS.filter((n) => !n.agencyOnly || agency).map((item) => {
