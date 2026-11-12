@@ -12,8 +12,8 @@ import {cameraConnectionLabel,useCameraConnectionStates} from '../services/camer
 import {cameraSource,cameraRegistrationError} from '../services/cameraConnection';
 import { LocationPicker, type RecordPosition } from './RecordLocation';
 
-type Camera = { id: string; name: string; location: string; latitude?: number | null; longitude?: number | null; playback_url: string | null; source_configured: boolean; stream_type: 'video' | 'hls' | 'mjpeg'; revision: number; minimum_clearance: number };
-const columns = 'id,name,location,latitude,longitude,playback_url,source_configured,stream_type,revision,minimum_clearance';
+type Camera = { id: string; name: string; location: string; is_default?:boolean; latitude?: number | null; longitude?: number | null; playback_url: string | null; source_configured: boolean; stream_type: 'video' | 'hls' | 'mjpeg'; revision: number; minimum_clearance: number };
+const columns = 'id,name,location,is_default,latitude,longitude,playback_url,source_configured,stream_type,revision,minimum_clearance';
 const playbackLabels = {
   connecting: 'Connecting to the playback endpoint…',
   ready: 'Video is ready to play.',
@@ -90,7 +90,7 @@ export function WorkspaceCameras({
         if (!mounted) return;
         if (error) setInventoryFailed(true);
         else {
-          const inventory = data as Camera[];
+          const inventory = (data as Camera[]).sort((a,b)=>Number(Boolean(b.is_default))-Number(Boolean(a.is_default))||a.name.localeCompare(b.name));
           setCameras(inventory);
           if (initialCameraId) {
             const selected = inventory.find(camera=>camera.id===initialCameraId);
@@ -251,6 +251,7 @@ export function WorkspaceCameras({
       {filteredCameras.map((camera) => (
         <article key={camera.id}>
           <h3>{camera.name}</h3>
+          {camera.is_default&&<p className="lv-badge">Default test camera</p>}
           <p>{camera.location}</p>
           <p>
             Clearance {camera.minimum_clearance} · {camera.stream_type?.toUpperCase()}
@@ -349,7 +350,7 @@ export function WorkspaceCameras({
           }}/>}
         </article>
       ))}
-      {gatewayFeed&&<GatewayCameraFeed key={gatewayFeed.id} cameraId={gatewayFeed.id} name={gatewayFeed.name} onClose={()=>setGatewayFeed(undefined)}/>}
+      {gatewayFeed&&<GatewayCameraFeed key={gatewayFeed.id} cameraId={gatewayFeed.id} name={gatewayFeed.name} workspaceId={workspaceId} onClose={()=>setGatewayFeed(undefined)}/>}
       {active && (
         <article>
           <h3>{active.name}</h3>

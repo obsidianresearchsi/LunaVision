@@ -19,6 +19,8 @@ const objectLabels = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'backpack'
 const pageSize = 30;
 
 const ALERT_CATEGORY_LABELS: Record<string, string> = {
+  person_presence:'Person presence',
+  vehicle_presence:'Vehicle presence',
   watchlist_match: 'Watchlist match',
   intrusion: 'Restricted intrusion',
   perimeter_breach: 'Perimeter breach',

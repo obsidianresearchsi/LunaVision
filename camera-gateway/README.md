@@ -33,9 +33,15 @@ Local loopback endpoints are deliberately rejected when opened from a hosted das
 
 ## Capacity and operation
 
+A Linux VPS can run the service with the unit and installer under `camera-gateway/deploy`. Install Node.js 20 or newer, npm and FFmpeg, unpack a gateway-only release under `/opt/lunavision-gateway`, and place its private pairing JSON at `/etc/lunavision-gateway/config.json`. The installer runs the service under a dedicated account with a read-only application directory and a private media directory. It does not install a VPN, expose RTSP ports, or modify an existing WireGuard interface. The VPS still needs a private route through a device at the camera site before it can ingest a private camera address.
+
 The initial configuration allows four simultaneous camera ingests, shared between viewers watching the same camera. Only two connection probes run concurrently. Idle ingests stop after 60 seconds. H.264 video is remuxed without decoding; other supported video is transcoded to H.264 with bounded threads. Audio is off. Segments are short-lived files in the ignored `.vercel/camera-gateway-media` folder and are removed when streams close. Stop/restart the service after changing its configuration.
 
 Start with one gateway per camera site. Camera capacity depends on resolution, bitrate, codec, available upload bandwidth, PC hardware, and concurrent viewers; this implementation has not been load-tested for a specific fleet size. For larger fleets, benchmark each site and add gateway hosts rather than assigning all sites to one operator PC. Gateway status, credential validation and camera settings are separate: saving a source does not prove a successful login, and a successful probe does not prove that every remote viewer can reach the site endpoint.
+
+Workspace owners and administrators can mark a default test camera. It is persisted in Supabase, sorted first in Cameras and selected initially in Camera Intelligence; camera clearance still applies. Each workspace has at most one default.
+
+The dedicated gateway viewer supports non-identifying person and vehicle presence alerts. It samples actual playing video, requires consecutive detections, applies a per-camera confidence threshold, and saves only camera/source-bound observations. The database enforces role, clearance, source verification, cooldown and idempotency checks. Other authorized dashboards receive the persisted presence alerts by polling. Processing currently runs in the visible browser while the feed is playing; a continuously running server-side inference worker is not included. Face identification or face-watchlist matching is not part of this pipeline.
 
 ## Verification
 

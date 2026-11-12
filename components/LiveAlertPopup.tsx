@@ -2,8 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Bell, Camera, Car, ScanFace, Shield, ShieldAlert, X } from 'lucide-react';
 import { LiveAlertKind, LiveAlertPayload, subscribeLiveAlerts } from '../services/liveAlertBus';
+import {supabase} from '../services/supabase';
+import {emitLiveAlert} from '../services/liveAlertBus';
 
 const KIND_LABELS: Record<LiveAlertKind, string> = {
+  person_presence:'PERSON PRESENCE DETECTED',
+  vehicle_presence:'VEHICLE DETECTED',
   watchlist_match: 'VEHICLE WATCHLIST MATCH',
   face_match: 'BIOMETRIC FACE MATCH',
   weapon: 'WEAPON / THREAT DETECTED',
@@ -19,6 +23,7 @@ function kindIcon(kind: LiveAlertKind) {
     case 'face_match':
       return <ScanFace size={18} aria-hidden="true" />;
     case 'watchlist_match':
+    case 'vehicle_presence':
     case 'vehicle_recognition':
       return <Car size={18} aria-hidden="true" />;
     case 'weapon':
@@ -66,6 +71,17 @@ export default function LiveAlertPopupHost({
   onOpenCamera?: (cameraId: string) => void;
 }) {
   const [queue, setQueue] = useState<LiveAlertPayload[]>([]);
+  useEffect(()=>{
+    let active=true,busy=false,cursor=new Date(Date.now()-1000).toISOString(),cursorId='00000000-0000-0000-0000-000000000000';const seen=new Set<string>();
+    async function check(){if(busy||document.visibilityState==='hidden')return;busy=true;
+      try{const {data,error}=await supabase.from('lv_agency_alerts').select('id,title,details,severity,camera_id,event_id,category,created_at').eq('workspace_id',workspaceId).in('category',['person_presence','vehicle_presence']).or(`created_at.gt.${cursor},and(created_at.eq.${cursor},id.gt.${cursorId})`).order('created_at',{ascending:true}).order('id',{ascending:true}).limit(100);
+        if(!active||error)return;
+        for(const row of data??[]){if(!seen.has(row.id)&&Date.now()-Date.parse(row.created_at)<60000){seen.add(row.id);emitLiveAlert({id:row.id,workspaceId,kind:row.category as LiveAlertKind,title:row.title,details:row.details,severity:row.severity,cameraId:row.camera_id,eventId:row.event_id,occurredAt:row.created_at,dedupeKey:'presence:'+row.id});}cursor=row.created_at;cursorId=row.id;}
+        if(seen.size>1000){const keep=[...seen].slice(-500);seen.clear();for(const id of keep)seen.add(id);}
+      }catch{/* Next poll retries without publishing an unsaved alert. */}finally{busy=false;}
+    }
+    void check();const timer=setInterval(()=>void check(),5000);return()=>{active=false;clearInterval(timer);};
+  },[workspaceId]);
 
   useEffect(() => {
     return subscribeLiveAlerts((incoming) => {

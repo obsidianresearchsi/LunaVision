@@ -16,6 +16,7 @@ interface CameraRecord {
   name: string;
   location: string;
   playback_url: string | null;
+  is_default?:boolean;
 }
 
 const DAY_LABELS = [
@@ -78,7 +79,7 @@ export const CameraControlCenter: React.FC<{
       const [camRes, featRes] = await Promise.all([
         supabase
           .from('lv_cameras')
-          .select('id, name, location, playback_url')
+          .select('id, name, location, playback_url,is_default')
           .eq('workspace_id', workspaceId)
           .order('created_at', { ascending: false }),
         supabase.rpc('lv_workspace_feature_map', { target: workspaceId }),
@@ -99,7 +100,7 @@ export const CameraControlCenter: React.FC<{
       const pick =
         initialCameraId && list.some((c) => c.id === initialCameraId)
           ? initialCameraId
-          : list[0]?.id || '';
+          : list.find(camera=>camera.is_default)?.id || list[0]?.id || '';
       setSelectedCameraId(pick);
       setLoading(false);
     }

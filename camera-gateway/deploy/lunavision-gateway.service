@@ -1,0 +1,28 @@
+[Unit]
+Description=LunarVision scoped site camera gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lunavision-gateway
+Group=lunavision-gateway
+WorkingDirectory=/opt/lunavision-gateway
+Environment=LUNAR_GATEWAY_CONFIG=/etc/lunavision-gateway/config.json
+ExecStart=/usr/bin/node /opt/lunavision-gateway/camera-gateway/server.mjs
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/lunavision-gateway/.vercel
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

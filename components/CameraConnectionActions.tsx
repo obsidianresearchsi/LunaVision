@@ -5,7 +5,7 @@ import CameraSourceFields from './CameraSourceFields';
 import type {SiteGateway} from './SiteGatewayPanel';
 
 type ManagedCamera = {
-  id: string; name: string; location: string; revision: number; minimum_clearance: number;
+  id: string; name: string; location: string; revision: number; minimum_clearance: number;is_default?:boolean;
   playback_url: string | null; stream_type: string;
 };
 
@@ -78,6 +78,9 @@ export default function CameraConnectionActions({camera, onChanged,gateways=[],g
       <button type="button" className="lv-secondary" aria-expanded={editing} disabled={busy} onClick={() => {setEditing(value => !value); setConfirming(false); setMessage('');}}>Edit camera</button>
       <button type="button" className="lv-secondary" disabled={busy} onClick={() => {setConfirming(true); setMessage('');}}>Remove camera</button>
       <button type="button" className="lv-secondary" disabled={busy} onClick={() => {setEditing(false); setConfirming(false); setMessage(''); onChanged();}}>Refresh camera</button>
+      {!camera.is_default&&<button type="button" className="lv-secondary" disabled={busy} onClick={()=>void mutate(async()=>{
+        const {data,error}=await supabase.rpc('lv_set_default_camera',{target:camera.id,expected_revision:camera.revision});if(error)throw error;if(data!==camera.id)throw new Error('Default was not confirmed');
+      },'Default test camera saved for this workspace.')}>Make default test camera</button>}
     </div>
     {editing && <div>
       {gateways.length>0&&<form aria-label={`Assign site gateway for ${camera.name}`} onSubmit={event=>{

@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 
 export type LiveAlertKind =
+  | 'person_presence'
+  | 'vehicle_presence'
   | 'watchlist_match'
   | 'face_match'
   | 'weapon'
@@ -32,6 +34,7 @@ export interface LiveAlertPayload {
 const LIVE_ALERT_EVENT = 'lv:live-alert';
 const ALERTS_UPDATED_EVENT = 'lv:alerts-updated';
 const recentDedupe = new Map<string, number>();
+const presenceIds=new Set<string>();
 
 export function notifyAlertsChanged(): void {
   if (typeof window === 'undefined') return;
@@ -48,6 +51,10 @@ export function subscribeAlertsChanged(handler: () => void): () => void {
 export function emitLiveAlert(
   input: Omit<LiveAlertPayload, 'id' | 'occurredAt'> & { id?: string; occurredAt?: string; dedupeKey?: string },
 ): LiveAlertPayload | null {
+  if(input.id&&['person_presence','vehicle_presence'].includes(input.kind)){
+    if(presenceIds.has(input.id))return null;presenceIds.add(input.id);
+    if(presenceIds.size>1000)presenceIds.delete(presenceIds.values().next().value!);
+  }
   const now = Date.now();
   const key = input.dedupeKey || `${input.workspaceId}:${input.kind}:${input.title}:${input.plate || input.faceName || ''}`;
   const last = recentDedupe.get(key);

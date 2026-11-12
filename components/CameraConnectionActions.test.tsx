@@ -16,6 +16,12 @@ beforeEach(async () => {
 afterEach(async () => {await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();});
 function button(text: string) {return Array.from(host.querySelectorAll('button')).find(b => b.textContent === text)!;}
 describe('Camera connection management', () => {
+  it('persists the default camera through the revision-guarded RPC',async()=>{
+    db.rpc.mockResolvedValue({data:'camera-id',error:null});
+    await act(async()=>button('Make default test camera').click());
+    expect(db.rpc).toHaveBeenCalledWith('lv_set_default_camera',{target:'camera-id',expected_revision:4});
+    expect(changed).toHaveBeenCalledWith('Default test camera saved for this workspace.');
+  });
   it('saves an unconnected camera’s details without inventing a playback URL', async () => {
     db.rpc.mockResolvedValue({data:null,error:null});
     await act(async () => button('Edit camera').click());
