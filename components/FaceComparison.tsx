@@ -94,10 +94,20 @@ export default function FaceComparison({
   const [progress, setProgress] = useState('');
   const [notice, setNotice] = useState('');
   const [probePreview, setProbePreview] = useState<LocalPhotoPreview | null>(null);
+  const [capturedProbeFile, setCapturedProbeFile] = useState<File | null>(null);
   const [adhocRefPreview, setAdhocRefPreview] = useState<LocalPhotoPreview | null>(null);
+  const [capturedAdhocRefFile, setCapturedAdhocRefFile] = useState<File | null>(null);
   const [adhocCandPreviews, setAdhocCandPreviews] = useState<LocalPhotoPreview[]>([]);
   const [refPreview, setRefPreview] = useState<string | null>(null);
   const [results, setResults] = useState<ComparisonResult[]>([]);
+
+  // Device / phone camera capture state
+  const [cameraTarget, setCameraTarget] = useState<'probe' | 'adhoc_ref' | null>(null);
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [cameraError, setCameraError] = useState('');
+  const [cameraLoading, setCameraLoading] = useState(false);
 
   // 1:N database search state
   const [dbMatches, setDbMatches] = useState<DatabaseSubjectMatch[]>([]);
@@ -113,7 +123,111 @@ export default function FaceComparison({
   const refInput = useRef<HTMLInputElement | null>(null);
   const candidateInput = useRef<HTMLInputElement | null>(null);
   const probeInput = useRef<HTMLInputElement | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const objectUrls = useRef<string[]>([]);
+
+  function stopDeviceCamera() {
+    if (cameraStreamRef.current) {
+      for (const track of cameraStreamRef.current.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+          // ignore
+        }
+      }
+      cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
+    }
+    setCameraTarget(null);
+    setCameraLoading(false);
+  }
+
+  async function openDeviceCamera(
+    target: 'probe' | 'adhoc_ref',
+    nextFacing: 'environment' | 'user' = cameraFacing,
+    deviceId: string = selectedCameraId,
+  ) {
+    setCameraError('');
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      setCameraError('Live camera access requires a secure (HTTPS) connection and a browser camera API.');
+      return;
+    }
+    stopDeviceCamera();
+    setCameraTarget(target);
+    setCameraLoading(true);
+    try {
+      const videoConstraint: MediaTrackConstraints = deviceId
+        ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        : { facingMode: { ideal: nextFacing }, width: { ideal: 1280 }, height: { ideal: 720 } };
+      const stream = await mediaDevices.getUserMedia({ video: videoConstraint, audio: false });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+        if (typeof cameraVideoRef.current.play === 'function') {
+          await cameraVideoRef.current.play().catch(() => {});
+        }
+      }
+      if (typeof mediaDevices.enumerateDevices === 'function') {
+        const all = await mediaDevices.enumerateDevices().catch(() => []);
+        const cams = all.filter((d) => d.kind === 'videoinput');
+        setCameraDevices(cams);
+        if (!deviceId && cams[0]?.deviceId) setSelectedCameraId(cams[0].deviceId);
+      }
+    } catch (err) {
+      stopDeviceCamera();
+      const msg = err instanceof Error ? err.message : 'Camera permission was denied or no camera was detected.';
+      setCameraError(`Could not open device camera: ${msg}`);
+    } finally {
+      setCameraLoading(false);
+    }
+  }
+
+  function captureCameraSnapshot() {
+    const video = cameraVideoRef.current;
+    if (!video || !cameraTarget) return;
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      setCameraError('Could not initialize camera capture buffer.');
+      return;
+    }
+    ctx.drawImage(video, 0, 0, width, height);
+    const activeTarget = cameraTarget;
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setCameraError('Could not capture snapshot from camera stream.');
+          return;
+        }
+        const file = new File([blob], `camera-capture-${Date.now()}.jpg`, { type: 'image/jpeg' });
+        if (activeTarget === 'probe') {
+          setCapturedProbeFile(file);
+          if (probeInput.current) probeInput.current.value = '';
+          setProbePreview(createFilePreview(file));
+          setNotice('');
+          setDbMatches([]);
+          setDbTelemetry(null);
+        } else {
+          setCapturedAdhocRefFile(file);
+          if (refInput.current) refInput.current.value = '';
+          setAdhocRefPreview(createFilePreview(file));
+          setNotice('');
+          setResults([]);
+        }
+        stopDeviceCamera();
+      },
+      'image/jpeg',
+      0.92,
+    );
+  }
 
   function clearResultPreviews() {
     for (const url of objectUrls.current) {
@@ -125,6 +239,7 @@ export default function FaceComparison({
 
   function clearProbeUpload() {
     setProbePreview(null);
+    setCapturedProbeFile(null);
     if (probeInput.current) probeInput.current.value = '';
     setDbMatches([]);
     setDbTelemetry(null);
@@ -133,6 +248,7 @@ export default function FaceComparison({
 
   function clearAdhocRefUpload() {
     setAdhocRefPreview(null);
+    setCapturedAdhocRefFile(null);
     if (refInput.current) refInput.current.value = '';
     setResults([]);
     setNotice('');
@@ -147,6 +263,7 @@ export default function FaceComparison({
 
   function handleProbeSelect(fileList: FileList | null) {
     const file = fileList?.[0];
+    setCapturedProbeFile(null);
     setProbePreview(file ? createFilePreview(file) : null);
     setNotice('');
     setDbMatches([]);
@@ -155,6 +272,7 @@ export default function FaceComparison({
 
   function handleAdhocRefSelect(fileList: FileList | null) {
     const file = fileList?.[0];
+    setCapturedAdhocRefFile(null);
     setAdhocRefPreview(file ? createFilePreview(file) : null);
     setNotice('');
     setResults([]);
@@ -182,9 +300,19 @@ export default function FaceComparison({
     () => () => {
       operation.current?.abort();
       clearResultPreviews();
+      stopDeviceCamera();
     },
     [],
   );
+
+  useEffect(() => {
+    if (cameraTarget && cameraVideoRef.current && cameraStreamRef.current) {
+      cameraVideoRef.current.srcObject = cameraStreamRef.current;
+      if (typeof cameraVideoRef.current.play === 'function') {
+        void cameraVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [cameraTarget]);
 
   async function searchEnrolledDatabase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,7 +328,7 @@ export default function FaceComparison({
 
     try {
       const formFields = new FormData(event.currentTarget);
-      const rawProbe = probeInput.current?.files?.[0] ?? formFields.get('probe');
+      const rawProbe = probeInput.current?.files?.[0] ?? capturedProbeFile ?? formFields.get('probe');
       if (!(rawProbe instanceof File) || rawProbe.size === 0) {
         throw new Error('Select a clear JPEG, PNG, or WebP probe image.');
       }
@@ -292,7 +420,7 @@ export default function FaceComparison({
       const photos = new FormData(event.currentTarget);
       const refFromInput = refInput.current?.files?.[0];
       const candFromInput = candidateInput.current?.files ? Array.from(candidateInput.current.files) : [];
-      const referenceEntry = refFromInput ?? photos.get('reference');
+      const referenceEntry = refFromInput ?? capturedAdhocRefFile ?? photos.get('reference');
       const candidateEntries = candFromInput.length > 0 ? candFromInput : photos.getAll('candidate');
 
       if (!(referenceEntry instanceof File) || referenceEntry.size === 0) {
@@ -486,11 +614,26 @@ export default function FaceComparison({
                   name="probe"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  required
+                  required={!capturedProbeFile}
                   disabled={busy}
                   onChange={(e) => handleProbeSelect(e.target.files)}
                 />
               </label>
+              <div className="lv-video-actions" style={{ marginBottom: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="lv-secondary"
+                  disabled={busy}
+                  onClick={() => void openDeviceCamera('probe')}
+                >
+                  Use Phone / Device Camera
+                </button>
+              </div>
+              {cameraError && cameraTarget === null && (
+                <p role="alert" style={{ color: '#ff8b89', fontSize: '0.84rem' }}>
+                  {cameraError}
+                </p>
+              )}
               <div className="lv-form-grid">
                 <label>
                   Case / Incident Reference (optional)
@@ -532,7 +675,64 @@ export default function FaceComparison({
                 )}
               </div>
 
-              {probePreview ? (
+              {cameraTarget === 'probe' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                  <video
+                    ref={cameraVideoRef}
+                    aria-label="Live device camera viewfinder"
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{
+                      width: '100%',
+                      maxHeight: '240px',
+                      borderRadius: '6px',
+                      border: '1px solid #38bdf8',
+                      background: '#05090d',
+                    }}
+                  />
+                  {cameraDevices.length > 1 && (
+                    <label style={{ fontSize: '0.8rem' }}>
+                      Camera device
+                      <select
+                        value={selectedCameraId}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          setSelectedCameraId(nextId);
+                          void openDeviceCamera('probe', cameraFacing, nextId);
+                        }}
+                      >
+                        {cameraDevices.map((dev, idx) => (
+                          <option key={dev.deviceId || idx} value={dev.deviceId}>
+                            {dev.label || `Camera ${idx + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className="lv-video-actions">
+                    <button type="button" disabled={cameraLoading || busy} onClick={captureCameraSnapshot}>
+                      {cameraLoading ? 'Starting camera…' : 'Capture Photo'}
+                    </button>
+                    <button
+                      type="button"
+                      className="lv-secondary"
+                      disabled={cameraLoading}
+                      onClick={() => {
+                        const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+                        setCameraFacing(nextFacing);
+                        setSelectedCameraId('');
+                        void openDeviceCamera('probe', nextFacing, '');
+                      }}
+                    >
+                      Switch Front / Rear
+                    </button>
+                    <button type="button" className="lv-secondary" onClick={stopDeviceCamera}>
+                      Close Camera
+                    </button>
+                  </div>
+                </div>
+              ) : probePreview ? (
                 <div>
                   {probePreview.url ? (
                     <img
@@ -562,6 +762,11 @@ export default function FaceComparison({
                   <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.55rem' }}>
                     <span className="lv-badge">{probePreview.name}</span>
                     <span className="lv-badge">{probePreview.sizeKb} KB</span>
+                    {capturedProbeFile && (
+                      <span className="lv-badge" style={{ borderColor: '#38bdf8', color: '#38bdf8' }}>
+                        Captured from camera
+                      </span>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -581,7 +786,7 @@ export default function FaceComparison({
                     textAlign: 'center',
                   }}
                 >
-                  Select or upload a probe photograph to preview it here before searching.
+                  Select an image file or click Use Phone / Device Camera to capture and preview a suspect photo here.
                 </button>
               )}
             </aside>
@@ -698,11 +903,26 @@ export default function FaceComparison({
                   name="reference"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  required
+                  required={!capturedAdhocRefFile}
                   disabled={busy}
                   onChange={(e) => handleAdhocRefSelect(e.target.files)}
                 />
               </label>
+              <div className="lv-video-actions" style={{ marginBottom: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="lv-secondary"
+                  disabled={busy}
+                  onClick={() => void openDeviceCamera('adhoc_ref')}
+                >
+                  Use Phone / Device Camera (Reference)
+                </button>
+              </div>
+              {cameraError && cameraTarget === null && (
+                <p role="alert" style={{ color: '#ff8b89', fontSize: '0.84rem' }}>
+                  {cameraError}
+                </p>
+              )}
               <label>
                 {gallery ? 'Gallery photos (up to 6)' : 'Photo to compare'}
                 <input
@@ -750,7 +970,45 @@ export default function FaceComparison({
                       </button>
                     )}
                   </div>
-                  {adhocRefPreview ? (
+                  {cameraTarget === 'adhoc_ref' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', width: '210px' }}>
+                      <video
+                        ref={cameraVideoRef}
+                        aria-label="Live reference camera viewfinder"
+                        autoPlay
+                        playsInline
+                        muted
+                        style={{
+                          width: '100%',
+                          maxHeight: '160px',
+                          borderRadius: '6px',
+                          border: '1px solid #38bdf8',
+                          background: '#05090d',
+                        }}
+                      />
+                      <div className="lv-video-actions">
+                        <button type="button" disabled={cameraLoading || busy} onClick={captureCameraSnapshot}>
+                          {cameraLoading ? 'Starting…' : 'Capture Photo'}
+                        </button>
+                        <button
+                          type="button"
+                          className="lv-secondary"
+                          disabled={cameraLoading}
+                          onClick={() => {
+                            const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+                            setCameraFacing(nextFacing);
+                            setSelectedCameraId('');
+                            void openDeviceCamera('adhoc_ref', nextFacing, '');
+                          }}
+                        >
+                          Flip
+                        </button>
+                        <button type="button" className="lv-secondary" onClick={stopDeviceCamera}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ) : adhocRefPreview ? (
                     <div>
                       {adhocRefPreview.url ? (
                         <img

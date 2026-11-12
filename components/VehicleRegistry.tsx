@@ -463,7 +463,7 @@ export default function VehicleRegistry({
 
       {/* Search & Registry Records Table */}
       <div style={{ marginTop: '1.25rem' }}>
-        <h3>Registered Vehicles ({filteredVehicles.length})</h3>
+        <h3>Registered Vehicles{loading ? '' : ` (${filteredVehicles.length})`}</h3>
         <div className="lv-observation-filters">
           <label>
             Search by plate, make, model, or source

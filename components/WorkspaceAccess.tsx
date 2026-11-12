@@ -546,7 +546,7 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
       {/* Paginated Personnel Roster (shown in Officer Management or Full/Business view, NOT in dedicated Audit-only mode) */}
       {(showPersonnelControls || (platform && isBusiness)) && (
         <section className="lv-card">
-          <h2>{platform && isBusiness ? 'Organization isolation notice' : `Personnel directory (${filteredStaff.length})`}</h2>
+          <h2>{platform && isBusiness ? 'Organization isolation notice' : loading ? 'Personnel directory' : `Personnel directory (${filteredStaff.length})`}</h2>
           {platform && isBusiness ? (
             <p>
               Business staff rosters, camera feeds, and incident records remain isolated inside the business workspace and are
@@ -665,32 +665,32 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
           >
             <article>
               <span>Total audit records</span>
-              <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>{activity.length}</strong>
+              <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>{loading ? '…' : activity.length}</strong>
               <small>Recent event window</small>
             </article>
             <article style={{ borderColor: '#a855f7' }}>
               <span>Access &amp; role changes</span>
               <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
-                {activity.filter((a) => classifyAuditAction(a.action).category === 'membership').length}
+                {loading ? '…' : activity.filter((a) => classifyAuditAction(a.action).category === 'membership').length}
               </strong>
               <small>Memberships &amp; clearances</small>
             </article>
             <article style={{ borderColor: '#f43f5e' }}>
               <span>Biometric subject logs</span>
               <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
-                {activity.filter((a) => classifyAuditAction(a.action).category === 'subject').length}
+                {loading ? '…' : activity.filter((a) => classifyAuditAction(a.action).category === 'subject').length}
               </strong>
               <small>Enrollments &amp; migrations</small>
             </article>
             <article style={{ borderColor: '#38bdf8' }}>
               <span>Camera, rules &amp; watchlist</span>
               <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
-                {
-                  activity.filter((a) => {
-                    const c = classifyAuditAction(a.action).category;
-                    return c === 'camera' || c === 'watchlist';
-                  }).length
-                }
+                {loading
+                  ? '…'
+                  : activity.filter((a) => {
+                      const c = classifyAuditAction(a.action).category;
+                      return c === 'camera' || c === 'watchlist';
+                    }).length}
               </strong>
               <small>Device &amp; hotlist events</small>
             </article>
@@ -717,7 +717,7 @@ export default function WorkspaceAccess({ workspace, platform, role, viewMode = 
                   setAuditPage(0);
                 }}
               >
-                <option value="all">All categories ({activity.length})</option>
+                <option value="all">All categories{loading ? '' : ` (${activity.length})`}</option>
                 <option value="membership">Access &amp; role changes</option>
                 <option value="subject">Biometric subjects</option>
                 <option value="camera">Cameras &amp; AI rules</option>

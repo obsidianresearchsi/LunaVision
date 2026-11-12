@@ -275,5 +275,76 @@ describe('FaceComparison component', () => {
       URL.revokeObjectURL = origRevokeObjectURL;
     }
   });
+
+  it('captures a probe photo from a connected device or phone camera and submits face search', async () => {
+    vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
+    const stopTrack = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const enumerateDevices = vi.fn().mockResolvedValue([
+      { kind: 'videoinput', deviceId: 'cam-front', label: 'Front Camera' },
+      { kind: 'videoinput', deviceId: 'cam-back', label: 'Back Camera' },
+    ]);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices },
+    });
+
+    const getCtxSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as any);
+    const toBlobSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toBlob')
+      .mockImplementation((cb) => cb?.(new Blob([new Uint8Array(512).fill(4)], { type: 'image/jpeg' })));
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    const mockFetch = vi.fn().mockResolvedValue(
+      Response.json({
+        mode: 'faceset_1n',
+        query_quality: 91,
+        query_blur: 2,
+        faces_in_probe: 1,
+        thresholds: { '1e-4': 75 },
+        matches: [],
+      }),
+    );
+    globalThis.fetch = mockFetch as any;
+
+    try {
+      await act(async () => {
+        root.render(<FaceComparison workspaceId="ws-ag-1" gallery />);
+      });
+
+      const openCamBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.includes('Use Phone / Device Camera'),
+      )!;
+      await act(async () => {
+        openCamBtn.click();
+      });
+      for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+
+      expect(getUserMedia).toHaveBeenCalled();
+      expect(host.querySelector('video[aria-label="Live device camera viewfinder"]')).toBeTruthy();
+
+      const captureBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.textContent?.trim() === 'Capture Photo',
+      )!;
+      await act(async () => {
+        captureBtn.click();
+      });
+      expect(stopTrack).toHaveBeenCalled();
+      expect(host.textContent).toContain('Captured from camera');
+
+      // Submit form directly with camera-captured probe file
+      const form = host.querySelector('form')!;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+      expect(mockFetch).toHaveBeenCalledWith('/api/face-intelligence', expect.objectContaining({ method: 'POST' }));
+    } finally {
+      getCtxSpy.mockRestore();
+      toBlobSpy.mockRestore();
+      playSpy.mockRestore();
+    }
+  });
 });
 

@@ -614,7 +614,7 @@ export default function IntelligenceDashboard({
           <label>
             Camera filter
             <select value={selectedCamera} onChange={(e) => setSelectedCamera(e.target.value)}>
-              <option value="all">All cameras ({cameras.length})</option>
+              <option value="all">All cameras{loading ? '' : ` (${cameras.length})`}</option>
               {cameras.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -674,52 +674,63 @@ export default function IntelligenceDashboard({
         <button type="button" onClick={() => onNavigate?.('cameras')}>
           <span>Connected cameras</span>
           <strong>
-            {stats.activeCameras} / {stats.totalCameras} active
+            {loading ? '…' : `${stats.activeCameras} / ${stats.totalCameras} active`}
           </strong>
-          <small>{stats.inactiveCameras} inactive in last 24h</small>
+          <small>{loading ? 'Fetching endpoints…' : `${stats.inactiveCameras} inactive in last 24h`}</small>
         </button>
 
         {agency ? (
           <>
             <button type="button" onClick={() => setCategoryFilter('line_crossing')} style={{ borderColor: '#2dd4bf' }}>
               <span style={{ fontWeight: 700 }}>People detected / crossed</span>
-              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.peopleFootfall.toLocaleString()}</strong>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>
+                {loading ? '…' : stats.peopleFootfall.toLocaleString()}
+              </strong>
               <small style={{ fontWeight: 600 }}>
-                In: {stats.peopleIn} · Out: {stats.peopleOut}
+                {loading ? 'Loading telemetry…' : `In: ${stats.peopleIn} · Out: ${stats.peopleOut}`}
               </small>
             </button>
             <button type="button" onClick={() => setCategoryFilter('census')} style={{ borderColor: '#38bdf8' }}>
               <span style={{ fontWeight: 700 }}>Cars &amp; vehicle detections</span>
-              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.vehicleTraffic.toLocaleString()}</strong>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>
+                {loading ? '…' : stats.vehicleTraffic.toLocaleString()}
+              </strong>
               <small style={{ fontWeight: 600 }}>
-                {stats.vehicleByType.car || 0} car · {stats.vehicleByType.truck || 0} truck ·{' '}
-                {stats.vehicleByType.motorcycle || 0} moto · {stats.vehicleByType.bus || 0} bus
+                {loading
+                  ? 'Loading vehicle logs…'
+                  : `${stats.vehicleByType.car || 0} car · ${stats.vehicleByType.truck || 0} truck · ${stats.vehicleByType.motorcycle || 0} moto · ${stats.vehicleByType.bus || 0} bus`}
               </small>
             </button>
             <button type="button" onClick={() => setCategoryFilter('plate_read')} style={{ borderColor: '#f59e0b' }}>
               <span style={{ fontWeight: 700 }}>ANPR plate reads</span>
-              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.plateReads.toLocaleString()}</strong>
-              <small style={{ fontWeight: 700, color: stats.watchlistMatches > 0 ? '#ff8b89' : undefined }}>
-                {stats.watchlistMatches} watchlist matches
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>
+                {loading ? '…' : stats.plateReads.toLocaleString()}
+              </strong>
+              <small style={{ fontWeight: 700, color: !loading && stats.watchlistMatches > 0 ? '#ff8b89' : undefined }}>
+                {loading ? 'Loading plate matches…' : `${stats.watchlistMatches} watchlist matches`}
               </small>
             </button>
             <button type="button" onClick={() => onNavigate?.('gallery')} style={{ borderColor: '#a855f7' }}>
               <span style={{ fontWeight: 700 }}>Biometric face matches</span>
               <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>
-                {faceSearchLogs.filter((l) => Array.isArray(l.matches_json) && l.matches_json.length > 0).length}
+                {loading ? '…' : faceSearchLogs.filter((l) => Array.isArray(l.matches_json) && l.matches_json.length > 0).length}
               </strong>
-              <small style={{ fontWeight: 600 }}>{faceSearchLogs.length} total face scans logged</small>
+              <small style={{ fontWeight: 600 }}>
+                {loading ? 'Loading scan logs…' : `${faceSearchLogs.length} total face scans logged`}
+              </small>
             </button>
-            <button type="button" onClick={() => onNavigate?.('alerts')} style={{ borderColor: stats.openAlertsCount > 0 ? '#ef4444' : undefined }}>
+            <button type="button" onClick={() => onNavigate?.('alerts')} style={{ borderColor: !loading && stats.openAlertsCount > 0 ? '#ef4444' : undefined }}>
               <span style={{ fontWeight: 700 }}>Active alerts (open)</span>
-              <strong style={{ fontSize: '1.75rem', fontWeight: 800, color: stats.openAlertsCount > 0 ? '#ff8b89' : undefined }}>
-                {stats.openAlertsCount}
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800, color: !loading && stats.openAlertsCount > 0 ? '#ff8b89' : undefined }}>
+                {loading ? '…' : stats.openAlertsCount}
               </strong>
-              <small style={{ fontWeight: 600 }}>{stats.openWatchlistAlertsCount} active watchlist alerts</small>
+              <small style={{ fontWeight: 600 }}>
+                {loading ? 'Loading alert queue…' : `${stats.openWatchlistAlertsCount} active watchlist alerts`}
+              </small>
             </button>
             <button type="button" onClick={() => onNavigate?.('records')}>
               <span style={{ fontWeight: 700 }}>Open investigations</span>
-              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{incidentCount}</strong>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{loading ? '…' : incidentCount}</strong>
               <small style={{ fontWeight: 600 }}>Active agency case files</small>
             </button>
           </>
@@ -727,31 +738,27 @@ export default function IntelligenceDashboard({
           <>
             <button type="button" onClick={() => setCategoryFilter('line_crossing')}>
               <span>Customer footfall</span>
-              <strong>{stats.peopleFootfall.toLocaleString()}</strong>
-              <small>
-                Entries: {stats.peopleIn} · Exits: {stats.peopleOut}
-              </small>
+              <strong>{loading ? '…' : stats.peopleFootfall.toLocaleString()}</strong>
+              <small>{loading ? 'Loading footfall…' : `Entries: ${stats.peopleIn} · Exits: ${stats.peopleOut}`}</small>
             </button>
             <button type="button" onClick={() => setCategoryFilter('occupancy')}>
               <span>Live occupancy (10m)</span>
-              <strong>{stats.currentPeopleOccupancy.toLocaleString()}</strong>
-              <small>Peak frame: {stats.peoplePeakFrame}</small>
+              <strong>{loading ? '…' : stats.currentPeopleOccupancy.toLocaleString()}</strong>
+              <small>{loading ? 'Computing occupancy…' : `Peak frame: ${stats.peoplePeakFrame}`}</small>
             </button>
             <button type="button">
               <span>Peak visiting hour</span>
-              <strong style={{ fontSize: '1.1rem' }}>{stats.peakHourLabel}</strong>
+              <strong style={{ fontSize: '1.1rem' }}>{loading ? '…' : stats.peakHourLabel}</strong>
               <small>Based on {PERIOD_CONFIG[period].label}</small>
             </button>
             <button type="button" onClick={() => setCategoryFilter('census')}>
               <span>Vehicle &amp; parking traffic</span>
-              <strong>{stats.vehicleTraffic.toLocaleString()}</strong>
-              <small>{stats.currentParkingOccupancy} parked vehicles (10m)</small>
+              <strong>{loading ? '…' : stats.vehicleTraffic.toLocaleString()}</strong>
+              <small>{loading ? 'Loading vehicles…' : `${stats.currentParkingOccupancy} parked vehicles (10m)`}</small>
             </button>
             <button type="button" onClick={() => onNavigate?.('alerts')}>
               <span>Open alerts &amp; incidents</span>
-              <strong>
-                {stats.openAlertsCount} / {incidentCount}
-              </strong>
+              <strong>{loading ? '…' : `${stats.openAlertsCount} / ${incidentCount}`}</strong>
               <small>Threshold, crowd, tamper &amp; site incidents</small>
             </button>
           </>

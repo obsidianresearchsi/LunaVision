@@ -22,6 +22,7 @@ const VALID_MODULE_IDS = new Set([
   'gallery',
   'intel',
   'enrollment',
+  'dossiers',
   'search_history',
   'watchlist',
   'history',

@@ -394,6 +394,13 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     expect(host.textContent).toContain('Enroll New Biometric Subject / Convict Dossier');
     expect(host.textContent).toContain('Enroll Convict / Subject & Register on FaceDB');
 
+    // Open Subject dossiers standalone page under EagleEye investigation
+    const dossiersBtn = host.querySelector('button[aria-label="Subject dossiers"]') as HTMLButtonElement;
+    expect(dossiersBtn).toBeTruthy();
+    await act(async () => { dossiersBtn.click(); });
+    for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Biometric Subject Dossiers & Criminal Registry');
+
     // Open Search history and verify live search audit history renders
     const histBtn = host.querySelector('button[aria-label="Search history"]') as HTMLButtonElement;
     expect(histBtn).toBeTruthy();

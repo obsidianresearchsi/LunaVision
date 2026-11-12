@@ -30,7 +30,7 @@ alter table public.lv_memberships add constraint lv_memberships_allowed_modules_
     'monitor','analytics','records','evidence','vehicles','access',
     'command','intelligence','cameras','camera_config','playback','alerts',
     'vehicle_registry','fleet','rules','overview','gallery','intel',
-    'enrollment','search_history','watchlist','history','faces'
+    'enrollment','dossiers','search_history','watchlist','history','faces'
   ]::text[]
 );
 
@@ -45,7 +45,7 @@ language sql stable security definer set search_path='' as $$
         or module_name = any(m.allowed_modules)
         or (module_name = 'monitor' and m.allowed_modules && array['command','cameras','camera_config','alerts','fleet','intel']::text[])
         or (module_name = 'analytics' and m.allowed_modules && array['intelligence','playback','rules','overview','history']::text[])
-        or (module_name = 'records' and m.allowed_modules && array['gallery','enrollment','search_history','faces']::text[])
+        or (module_name = 'records' and m.allowed_modules && array['gallery','enrollment','dossiers','search_history','faces']::text[])
         or (module_name = 'vehicles' and m.allowed_modules && array['vehicle_registry','watchlist']::text[])
       )
   )
@@ -67,7 +67,7 @@ begin
       'monitor','analytics','records','evidence','vehicles','access',
       'command','intelligence','cameras','camera_config','playback','alerts',
       'vehicle_registry','fleet','rules','overview','gallery','intel',
-      'enrollment','search_history','watchlist','history','faces'
+      'enrollment','dossiers','search_history','watchlist','history','faces'
     ]::text[]
     or (access_role='admin' and not (is_platform or manager.role='owner')) then raise exception 'Invalid role, clearance or module access'; end if;
   select id into recipient from auth.users where lower(email)=lower(btrim(email_address)) and email_confirmed_at is not null;

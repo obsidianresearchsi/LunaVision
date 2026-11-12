@@ -35,6 +35,7 @@ import {
   ClipboardList,
   Database,
   FileText,
+  FolderOpen,
   Globe,
   KeyRound,
   LayoutDashboard,
@@ -88,6 +89,7 @@ const panelIcons = {
   faces: ScanFace,
   gallery: Search,
   enrollment: UserPlus,
+  dossiers: FolderOpen,
   search_history: Activity,
   access: Users,
   issue: UserPlus,
@@ -692,6 +694,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           ['faces', 'Face comparison'],
           ['gallery', 'Gallery search'],
           ...(features.biometric_enrollment ? [['enrollment', 'Enroll subject']] : []),
+          ['dossiers', 'Subject dossiers'],
           ...(features.face_search ? [['search_history', 'Search history']] : []),
           ['history', 'Detection history'],
         ]
@@ -815,6 +818,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         { id: 'gallery', label: 'Face search', icon: Search },
         { id: 'intel', label: 'Intel map', icon: Globe },
         ...(features.biometric_enrollment ? [{ id: 'enrollment', label: 'Enroll subject', icon: UserPlus }] : []),
+        { id: 'dossiers', label: 'Subject dossiers', icon: FolderOpen },
         ...(features.face_search ? [{ id: 'search_history', label: 'Search history', icon: Activity }] : []),
         { id: 'watchlist', label: 'Watchlist', icon: Users },
         { id: 'history', label: 'Detection history', icon: Activity },
@@ -1229,7 +1233,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                         navigate('cameras');
                         setRequestedCamera(id);
                       }}
-                      onOpenSubject={features.biometric_enrollment ? () => navigate('enrollment') : undefined}
+                      onOpenSubject={() => navigate('dossiers')}
                     />
                   </>
                 )}
@@ -1255,7 +1259,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                       navigate('cameras');
                       setRequestedCamera(id);
                     }}
-                    onOpenSubject={features.biometric_enrollment ? () => navigate('enrollment') : undefined}
+                    onOpenSubject={() => navigate('dossiers')}
                   />
                 )}
                 {!platformView && isMember && (panel === 'cameras' || (!agency && panel === 'fleet')) && (
@@ -1373,6 +1377,18 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     role={membership?.role}
                     platformAdmin={platformView && admin}
                     initialTab="enroll"
+                    enrollmentEnabled={features.biometric_enrollment}
+                    searchEnabled={features.face_search}
+                    onOpenFaceSearch={features.face_search ? () => navigate('gallery') : undefined}
+                  />
+                )}
+                {!platformView && isMember && agency && panel === 'dossiers' && (
+                  <SubjectEnrollmentCenter
+                    key={account + selected + 'dossiers'}
+                    workspaceId={selected}
+                    role={membership?.role}
+                    platformAdmin={platformView && admin}
+                    initialTab="directory"
                     enrollmentEnabled={features.biometric_enrollment}
                     searchEnabled={features.face_search}
                     onOpenFaceSearch={features.face_search ? () => navigate('gallery') : undefined}

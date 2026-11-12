@@ -316,13 +316,13 @@ export default function AgencyCommandMap({
       <h2>Agency operations map</h2>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
         <span className="lv-badge" style={{ borderColor: colors.camera, color: colors.camera }}>
-          ● Cameras ({items.filter(i => i.kind === 'camera').length})
+          ● Cameras ({loading ? '…' : items.filter(i => i.kind === 'camera').length})
         </span>
         <span className="lv-badge" style={{ borderColor: colors.subject, color: colors.subject }}>
-          ● Enrolled subjects ({items.filter(i => i.kind === 'subject').length})
+          ● Enrolled subjects ({loading ? '…' : items.filter(i => i.kind === 'subject').length})
         </span>
         <span className="lv-badge" style={{ borderColor: colors.investigation, color: colors.investigation }}>
-          ● Investigations ({items.filter(i => i.kind === 'investigation').length})
+          ● Investigations ({loading ? '…' : items.filter(i => i.kind === 'investigation').length})
         </span>
       </div>
       <div className="lv-command-map-canvas" ref={host} aria-label="Agency cameras, subjects and investigations map" />

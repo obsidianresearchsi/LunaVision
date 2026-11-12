@@ -691,14 +691,21 @@ describe('Video Intelligence UI Workflows', () => {
       }
       return Promise.resolve({ data: null, error: null });
     });
+    let resolveLogs!: (v: any) => void;
+    const pendingLogsChain: any = {
+      select: () => pendingLogsChain,
+      eq: () => pendingLogsChain,
+      order: () => pendingLogsChain,
+      limit: () => new Promise((r) => { resolveLogs = r; }),
+    };
     mockFrom.mockImplementation((table: string) => {
-      if (table === 'lv_workspace_activity') return makeChain(manyLogs);
+      if (table === 'lv_workspace_activity') return pendingLogsChain;
       return makeChain([]);
     });
 
     const { default: WorkspaceAccess } = await import('./WorkspaceAccess');
 
-    // Audit mode: detailed paginated logs ONLY, no account creation
+    // Audit mode: detailed paginated logs ONLY, no account creation, and no 0-flash while loading
     await act(async () => {
       root.render(
         <WorkspaceAccess
@@ -709,6 +716,14 @@ describe('Video Intelligence UI Workflows', () => {
           onUpdated={async () => {}}
         />,
       );
+    });
+    expect(host.textContent).toContain('Total audit records…');
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_workspace_activity') return makeChain(manyLogs);
+      return makeChain([]);
+    });
+    await act(async () => {
+      resolveLogs({ data: manyLogs, error: null });
     });
     for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
     expect(host.textContent).toContain('Access & Security Audit Logs');

@@ -189,11 +189,13 @@ export default function SubjectEnrollmentCenter({
   const [error, setError] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
 
-  // Directory filters
+  // Directory filters & pagination
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [threatFilter, setThreatFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('active');
+  const [subjectPage, setSubjectPage] = useState(0);
+  const SUBJECTS_PAGE_SIZE = 8;
 
   // Single police/convict enrollment state (multi-angle up to 5 photos)
   const [bookingMode, setBookingMode] = useState<'simple' | 'advanced'>('simple');
@@ -237,6 +239,10 @@ export default function SubjectEnrollmentCenter({
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    setSubjectPage(0);
+  }, [searchQuery, categoryFilter, threatFilter, statusFilter, workspaceId]);
 
   useEffect(() => {
     let active = true;
@@ -809,15 +815,26 @@ export default function SubjectEnrollmentCenter({
     const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
     return matchesQ && matchesCat && matchesThreat && matchesStatus;
   });
+  const totalSubjectPages = Math.max(1, Math.ceil(filteredSubjects.length / SUBJECTS_PAGE_SIZE));
+  const safeSubjectPage = Math.min(subjectPage, totalSubjectPages - 1);
+  const pagedSubjects = filteredSubjects.slice(
+    safeSubjectPage * SUBJECTS_PAGE_SIZE,
+    (safeSubjectPage + 1) * SUBJECTS_PAGE_SIZE,
+  );
 
   return (
     <section className="lv-card" aria-label="Enterprise Subject Enrollment & Criminal Database Migration">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
-          <h2>Agency Subject Enrollment, Bulk Migration &amp; Biometric Dossiers</h2>
+          <h2>
+            {tab === 'directory'
+              ? 'Biometric Subject Dossiers & Criminal Registry'
+              : 'Agency Subject Enrollment, Bulk Migration & Biometric Dossiers'}
+          </h2>
           <p>
-            Enroll authorized subject dossiers with multi-angle FaceDB biometric vectors, migrate bulk CSV/Excel
-            criminal datasets and mugshot folders into an isolated per-agency FaceSet, and audit all face searches.
+            {tab === 'directory'
+              ? 'Searchable biometric casebook of enrolled wanted subjects, suspects, persons of interest, and custody dossiers indexed for real-time face search and Intel Map tracking.'
+              : 'Enroll authorized subject dossiers with multi-angle FaceDB biometric vectors, migrate bulk CSV/Excel criminal datasets and mugshot folders into an isolated per-agency FaceSet, and audit all face searches.'}
           </p>
         </div>
         <div className="lv-video-actions">
@@ -835,14 +852,14 @@ export default function SubjectEnrollmentCenter({
             Enroll Subject
           </button>
           <button type="button" className={tab === 'directory' ? '' : 'lv-secondary'} onClick={() => setTab('directory')}>
-            Dossier Directory ({subjects.length})
+            {loading ? 'Subject Dossiers' : `Subject Dossiers (${subjects.length})`}
           </button>
           <button type="button" className={tab === 'migrate' ? '' : 'lv-secondary'} onClick={() => setTab('migrate')}>
             Bulk Data &amp; Photo Migration
           </button>
           {searchEnabled && (
             <button type="button" className={tab === 'history' ? '' : 'lv-secondary'} onClick={() => setTab('history')}>
-              Search Audit History ({history.length})
+              {loading ? 'Search Audit History' : `Search Audit History (${history.length})`}
             </button>
           )}
           {onOpenFaceSearch && (
@@ -903,12 +920,25 @@ export default function SubjectEnrollmentCenter({
           </div>
 
           {loading ? (
-            <p>Loading subject dossiers…</p>
+            <p className="lv-notice">Fetching subject dossiers and signed mugshots…</p>
           ) : filteredSubjects.length === 0 ? (
             <p>No enrolled subject dossiers match this filter. Use "Enroll Subject" or "Bulk Data & Photo Migration".</p>
           ) : (
-            filteredSubjects.map((sub) => (
-              <article key={sub.id}>
+            <>
+              {pagedSubjects.map((sub) => (
+                <article
+                  key={sub.id}
+                  style={{
+                    borderRadius: '8px',
+                    border: '1px solid #223244',
+                    borderLeft: `4px solid ${
+                      sub.threat_level === 'critical' || sub.threat_level === 'high' ? '#ef4444' : '#38bdf8'
+                    }`,
+                    background: '#0b121a',
+                    padding: '0.85rem',
+                    marginTop: '0.75rem',
+                  }}
+                >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', gap: '0.9rem', alignItems: 'flex-start', flex: 1 }}>
                     {photoUrls[sub.id] && (
@@ -1001,7 +1031,33 @@ export default function SubjectEnrollmentCenter({
                   </div>
                 </div>
               </article>
-            ))
+              ))}
+              {filteredSubjects.length > SUBJECTS_PAGE_SIZE && (
+                <div className="lv-video-actions" style={{ marginTop: '0.9rem', justifyContent: 'space-between' }}>
+                  <button
+                    type="button"
+                    className="lv-secondary"
+                    disabled={safeSubjectPage === 0}
+                    onClick={() => setSubjectPage((p) => Math.max(0, p - 1))}
+                  >
+                    Previous
+                  </button>
+                  <small style={{ color: '#94a3b8' }}>
+                    Page {safeSubjectPage + 1} of {totalSubjectPages} · Showing {safeSubjectPage * SUBJECTS_PAGE_SIZE + 1}–
+                    {Math.min((safeSubjectPage + 1) * SUBJECTS_PAGE_SIZE, filteredSubjects.length)} of {filteredSubjects.length}{' '}
+                    dossiers
+                  </small>
+                  <button
+                    type="button"
+                    className="lv-secondary"
+                    disabled={safeSubjectPage + 1 >= totalSubjectPages}
+                    onClick={() => setSubjectPage((p) => p + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
