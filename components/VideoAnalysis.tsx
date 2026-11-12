@@ -145,7 +145,7 @@ function VideoViewer({
   const [savingObservation, setSavingObservation] = useState(false);
   const [autoSave, setAutoSave] = useState(true);
   const [autoAnpr, setAutoAnpr] = useState(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
-  const [autoFaceScan, setAutoFaceScan] = useState(Boolean(watchlistWorkspaceId));
+  const [autoFaceScan, setAutoFaceScan] = useState(Boolean(observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true'));
   const saveLock = useRef(false);
   const saveAction = useRef<() => void>(() => {});
   const lastAutoSave = useRef(0);
@@ -191,8 +191,8 @@ function VideoViewer({
 
   useEffect(() => {
     setAutoAnpr(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
-    setAutoFaceScan(Boolean(watchlistWorkspaceId));
-  }, [watchlistWorkspaceId, intelSettings.capabilities.anpr?.enabled]);
+    setAutoFaceScan(Boolean(observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true'));
+  }, [watchlistWorkspaceId, observation?.workspaceId, intelSettings.capabilities.anpr?.enabled]);
 
   useEffect(() => {
     if (!observation?.workspaceId) {
@@ -200,20 +200,44 @@ function VideoViewer({
       return;
     }
     let active = true;
-    void supabase
-      .from('lv_agency_rules')
-      .select('id,name,object_label,minimum_confidence,severity,enabled,cooldown_seconds')
-      .eq('workspace_id', observation.workspaceId)
-      .eq('enabled', true)
-      .then(({ data }) => {
-        if (active && Array.isArray(data)) {
-          agencyRulesRef.current = data as AgencyRuleRecord[];
-        }
-      });
+    const loadRules = () => {
+      void supabase
+        .from('lv_agency_rules')
+        .select('id,name,object_label,minimum_confidence,severity,enabled,cooldown_seconds')
+        .eq('workspace_id', observation.workspaceId)
+        .eq('enabled', true)
+        .then(({ data }) => {
+          if (active && Array.isArray(data)) {
+            agencyRulesRef.current = data as AgencyRuleRecord[];
+          }
+        });
+    };
+    loadRules();
+    const onRulesUpdated = () => loadRules();
+    if (typeof window !== 'undefined') window.addEventListener('lv:rules-updated', onRulesUpdated);
     return () => {
       active = false;
+      if (typeof window !== 'undefined') window.removeEventListener('lv:rules-updated', onRulesUpdated);
     };
   }, [observation?.workspaceId]);
+
+  function captureHiResCanvas(media: HTMLVideoElement | null, fallbackCanvas: HTMLCanvasElement, maxDim = 1280): HTMLCanvasElement {
+    if (!media || media.readyState < 2 || !media.videoWidth || !media.videoHeight) {
+      return fallbackCanvas;
+    }
+    const scale = Math.min(1, maxDim / Math.max(media.videoWidth, media.videoHeight));
+    const hiCanvas = document.createElement('canvas');
+    hiCanvas.width = Math.max(1, Math.round(media.videoWidth * scale));
+    hiCanvas.height = Math.max(1, Math.round(media.videoHeight * scale));
+    const hiCtx = hiCanvas.getContext('2d');
+    if (!hiCtx) return fallbackCanvas;
+    try {
+      hiCtx.drawImage(media, 0, 0, hiCanvas.width, hiCanvas.height);
+      return hiCanvas;
+    } catch {
+      return fallbackCanvas;
+    }
+  }
 
   async function scanCanvasForFaces(sourceCanvas: HTMLCanvasElement, manual = false) {
     if (!observation?.workspaceId || faceScanInFlight.current) return;
@@ -512,13 +536,13 @@ function VideoViewer({
           if (
             autoFaceScan &&
             observation?.workspaceId &&
-            watchlistWorkspaceId &&
             !faceScanInFlight.current &&
             nowMs - lastFaceScanMs.current >= 7000 &&
             objects.some((o) => o.class.toLowerCase() === 'person' && o.score >= 0.45)
           ) {
             lastFaceScanMs.current = nowMs;
-            void scanCanvasForFaces(frame, false);
+            const hiCanvas = captureHiResCanvas(media, frame, 1280);
+            void scanCanvasForFaces(hiCanvas, false);
           }
 
           // Background Automatic ANPR on detected vehicles when enabled
@@ -534,14 +558,15 @@ function VideoViewer({
             if (vehicleObj) {
               lastAutoAnprMs.current = nowMs;
               const [vx, vy, vw, vh] = vehicleObj.bbox;
-              // Focus on lower 65% of vehicle bounding box where number plates are mounted
+              // Focus on lower 65% of vehicle bounding box where number plates are mounted (using full-res video canvas)
+              const hiCanvas = captureHiResCanvas(media, frame, 1280);
               const region: Box = {
                 x: Math.max(0, vx / frame.width),
                 y: Math.max(0, (vy + vh * 0.35) / frame.height),
                 width: Math.min(1, vw / frame.width),
                 height: Math.min(1, (vh * 0.65) / frame.height),
               };
-              void runBackgroundPlateOcr(frame, region, vehicleObj.class.toLowerCase());
+              void runBackgroundPlateOcr(hiCanvas, region, vehicleObj.class.toLowerCase());
             }
           }
 
@@ -1136,7 +1161,7 @@ function VideoViewer({
               <button type="button" disabled={!ready} onClick={freezeFrame}>
                 Freeze frame for plate OCR
               </button>
-              {observation?.workspaceId && watchlistWorkspaceId && (
+              {observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true' && (
                 <button
                   type="button"
                   className="lv-secondary"
@@ -1144,11 +1169,12 @@ function VideoViewer({
                   onClick={() => {
                     const media = video.current;
                     if (!media || media.readyState < 2) return;
-                    const snapCanvas = document.createElement('canvas');
-                    snapCanvas.width = Math.max(1, size.width);
-                    snapCanvas.height = Math.max(1, size.height);
-                    snapCanvas.getContext('2d')?.drawImage(media, 0, 0, snapCanvas.width, snapCanvas.height);
-                    void scanCanvasForFaces(snapCanvas, true);
+                    const fallback = document.createElement('canvas');
+                    fallback.width = Math.max(1, size.width);
+                    fallback.height = Math.max(1, size.height);
+                    fallback.getContext('2d')?.drawImage(media, 0, 0, fallback.width, fallback.height);
+                    const hiCanvas = captureHiResCanvas(media, fallback, 1280);
+                    void scanCanvasForFaces(hiCanvas, true);
                   }}
                 >
                   Scan faces in frame
@@ -1164,7 +1190,7 @@ function VideoViewer({
                   <span>Real-time background ANPR matching</span>
                 </label>
               )}
-              {watchlistWorkspaceId && (
+              {observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true' && (
                 <label className="lv-inline-check" style={{ marginLeft: '0.5rem' }}>
                   <input
                     type="checkbox"

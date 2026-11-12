@@ -483,6 +483,7 @@ export default function AgencyOperations({
                         cooldown_seconds: tpl.cooldownSeconds,
                       });
                       if (error) throw new Error(error.message);
+                      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lv:rules-updated'));
                     }, `Installed AI Rule: ${tpl.name}`)
                   }
                 >
@@ -1008,13 +1009,17 @@ export default function AgencyOperations({
                 submit(
                   event,
                   async (fields) => {
+                    const title = String(fields.get('title')).trim();
+                    const details = String(fields.get('details')).trim();
+                    const severity = String(fields.get('severity') || 'medium') as 'low' | 'medium' | 'high';
                     const { error } = await supabase.from('lv_agency_alerts').insert({
                       workspace_id: workspaceId,
-                      title: String(fields.get('title')).trim(),
-                      details: String(fields.get('details')).trim(),
-                      severity: fields.get('severity'),
+                      title,
+                      details,
+                      severity,
                     });
                     if (error) throw new Error('Alert could not be saved. Check your connection and retry.');
+                    notifyAlertsChanged();
                     onAlertsChanged?.();
                   },
                   'Alert saved.',
@@ -1134,6 +1139,7 @@ export default function AgencyOperations({
                     }
                     throw new Error('Rule could not be saved. Check your access and retry.');
                   }
+                  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('lv:rules-updated'));
                 },
                 'Rule saved and enabled for future saved observations.',
               )

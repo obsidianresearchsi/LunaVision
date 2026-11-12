@@ -78,6 +78,7 @@ export function WorkspaceCameras({
           if (initialCameraId) {
             const selected = inventory.find(camera=>camera.id===initialCameraId);
             setActive(selected?.playback_url ? selected : undefined);
+            if (selected?.playback_url) setShowAnalysis(true);
             if (selected && !selected.playback_url) setNotice('This camera source is saved, but a gateway playback URL has not been configured.');
           }
         }

@@ -1365,7 +1365,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                                   {record.status !== 'resolved' && (
                                     <button
                                       type="button"
-                                      disabled={busy}
+                                      disabled={busy || membership?.role === 'viewer'}
                                       onClick={() => {
                                         setBusy(true);
                                         setNotice('');
