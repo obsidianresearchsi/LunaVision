@@ -19,4 +19,14 @@ describe('Staff account provisioning',()=>{
  it('rejects clearance escalation',async()=>{const {admin}=setup('admin',1);expect((await issueAgencyAccount(request({clearance:3}),env)).status).toBe(403);expect(admin.auth.admin.createUser).not.toHaveBeenCalled();});
  it('creates a business staff account with a business setup callback and explicit permissions',async()=>{const {admin,rpc}=setup();const result=await issueAgencyAccount(request({}),env);expect(result.status).toBe(201);expect(admin.auth.admin.generateLink).toHaveBeenCalledWith(expect.objectContaining({options:{redirectTo:'https://app.example.com/business'}}));expect(rpc).toHaveBeenCalledWith('lv_set_staff_access',expect.objectContaining({access_clearance:0,modules:['monitor']}));});
  it('does not reset an existing user password',async()=>{const {admin}=setup();admin.auth.admin.createUser.mockResolvedValue({data:{user:null},error:{code:'email_exists'}});expect((await issueAgencyAccount(request({}),env)).status).toBe(200);expect(admin.auth.admin.generateLink).not.toHaveBeenCalled();});
+ it('accepts granular non-admin sidebar page modules and falls back to coarse DB scopes if needed',async()=>{
+  const {rpc}=setup();
+  rpc
+    .mockResolvedValueOnce({error:{message:'Invalid role, clearance or module access'}})
+    .mockResolvedValueOnce({error:null});
+  const res=await issueAgencyAccount(request({modules:['command','cameras','gallery']}),env);
+  expect(res.status).toBe(201);
+  expect(rpc).toHaveBeenNthCalledWith(1,'lv_set_staff_access',expect.objectContaining({modules:['command','cameras','gallery']}));
+  expect(rpc).toHaveBeenNthCalledWith(2,'lv_set_staff_access',expect.objectContaining({modules:['monitor','records']}));
+ });
 });

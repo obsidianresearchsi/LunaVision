@@ -17,8 +17,9 @@ export function LocationPicker({value,onChange,disabled=false,onLocatingChange}:
     L.tileLayer(basemap.url,basemap.options).addTo(instance);
     instance.on('click',(event:L.LeafletMouseEvent)=>{if(!disabled)change.current({latitude:event.latlng.lat,longitude:event.latlng.lng});});
     map.current=instance;
-    const observer=new ResizeObserver(()=>instance.invalidateSize());observer.observe(host.current);
-    return()=>{observer.disconnect();instance.remove();map.current=null;pin.current=null;};
+    const observer=typeof ResizeObserver!=='undefined'?new ResizeObserver(()=>instance.invalidateSize()):null;
+    observer?.observe(host.current);
+    return()=>{observer?.disconnect();instance.remove();map.current=null;pin.current=null;};
   },[disabled]);
   useEffect(()=>{
     const instance=map.current;if(!instance)return;

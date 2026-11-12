@@ -1,6 +1,8 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { compressImage } from '../utils/imageCompression';
+import { LocationPicker, type RecordPosition } from './RecordLocation';
+import { formatLocationWithCoords, parseSubjectLocation, stripLocationCoords } from '../services/locationUtils';
 import {
   SubjectMigrationRowInput,
   parseSubjectMigrationFile,
@@ -27,6 +29,8 @@ interface AgencySubject {
   case_reference: string;
   national_id: string;
   last_known_location: string;
+  latitude?: number | null;
+  longitude?: number | null;
   physical_marks: string;
   notes: string;
   status: SubjectStatus;
@@ -199,6 +203,7 @@ export default function SubjectEnrollmentCenter({
   const [anglePhotos, setAnglePhotos] = useState<{ file: File; angle: string }[]>([]);
   const [primaryPreviewUrl, setPrimaryPreviewUrl] = useState<string | null>(null);
   const [editingSubject, setEditingSubject] = useState<AgencySubject | null>(null);
+  const [subjectLocation, setSubjectLocation] = useState<RecordPosition | null>(null);
   const [lastEnrolled, setLastEnrolled] = useState<{
     fullName: string;
     subjectCode: string | null;
@@ -393,6 +398,8 @@ export default function SubjectEnrollmentCenter({
 
       setBookingStep(3);
       const subjectCodeVal = String(fields.get('subject_code') || '').trim() || autoBookingCode;
+      const rawLocation = String(fields.get('last_known_location') || '').trim();
+      const persistedLocation = formatLocationWithCoords(rawLocation, subjectLocation);
       const entryPayload = {
         ...(editingSubject ? { id: editingSubject.id } : {}),
         subject_code: subjectCodeVal,
@@ -407,7 +414,8 @@ export default function SubjectEnrollmentCenter({
         date_of_birth: String(fields.get('date_of_birth') || '').trim(),
         gender: String(fields.get('gender') || '').trim(),
         nationality: String(fields.get('nationality') || '').trim(),
-        last_known_location: String(fields.get('last_known_location') || '').trim(),
+        last_known_location: persistedLocation,
+        ...(subjectLocation ? { latitude: subjectLocation.latitude, longitude: subjectLocation.longitude } : {}),
         physical_marks: String(fields.get('physical_marks') || '').trim(),
         status: String(fields.get('status') || 'active'),
         minimum_clearance: Number(fields.get('minimum_clearance') || 0),
@@ -415,16 +423,28 @@ export default function SubjectEnrollmentCenter({
         source_name: 'manual',
       };
 
-      const { error: saveErr } = await supabase.rpc('lv_upsert_agency_subject', {
+      const { data: savedSubjectId, error: saveErr } = await supabase.rpc('lv_upsert_agency_subject', {
         target: workspaceId,
         entry: entryPayload,
         photos: uploadedPhotos,
       });
       if (saveErr) throw new Error(saveErr.message);
+      if (subjectLocation && savedSubjectId) {
+        try {
+          await supabase
+            .from('lv_agency_subjects')
+            .update({ latitude: subjectLocation.latitude, longitude: subjectLocation.longitude })
+            .eq('workspace_id', workspaceId)
+            .eq('id', String(savedSubjectId));
+        } catch {
+          // Live Postgres instances prior to migration 202611130002 store coordinates in last_known_location.
+        }
+      }
 
       setBookingStep(4);
       form.reset();
       clearSelectedMugshots();
+      setSubjectLocation(null);
       setAllowMetadataOnly(false);
       setAutoBookingCode(generateBookingCode());
 
@@ -800,6 +820,7 @@ export default function SubjectEnrollmentCenter({
             className={tab === 'enroll' ? '' : 'lv-secondary'}
             onClick={() => {
               setEditingSubject(null);
+              setSubjectLocation(null);
               setAutoBookingCode(generateBookingCode());
               clearSelectedMugshots();
               setTab('enroll');
@@ -913,7 +934,17 @@ export default function SubjectEnrollmentCenter({
                       <p style={{ margin: '0.25rem 0' }}>
                         {sub.warrant_reference && <>Warrant: <strong>{sub.warrant_reference}</strong> · </>}
                         {sub.case_reference && <>Case: <strong>{sub.case_reference}</strong> · </>}
-                        {sub.last_known_location && <>Last seen: {sub.last_known_location} · </>}
+                        {stripLocationCoords(sub.last_known_location) && (
+                          <>Last seen: {stripLocationCoords(sub.last_known_location)} · </>
+                        )}
+                        {(() => {
+                          const coords = parseSubjectLocation(sub.last_known_location, sub.latitude, sub.longitude);
+                          return coords.latitude !== null && coords.longitude !== null ? (
+                            <span className="lv-badge" style={{ marginRight: '0.35rem' }}>
+                              GPS {coords.latitude.toFixed(4)}, {coords.longitude.toFixed(4)}
+                            </span>
+                          ) : null;
+                        })()}
                         Source: {sub.source_name}
                       </p>
                       <small>
@@ -930,6 +961,12 @@ export default function SubjectEnrollmentCenter({
                         disabled={busy}
                         onClick={() => {
                           setEditingSubject(sub);
+                          const parsedLoc = parseSubjectLocation(sub.last_known_location, sub.latitude, sub.longitude);
+                          setSubjectLocation(
+                            parsedLoc.latitude !== null && parsedLoc.longitude !== null
+                              ? { latitude: parsedLoc.latitude, longitude: parsedLoc.longitude }
+                              : null,
+                          );
                           setBookingMode('advanced');
                           clearSelectedMugshots();
                           setLastEnrolled(null);
@@ -1243,7 +1280,7 @@ export default function SubjectEnrollmentCenter({
                     Location / L.G.A / Custody Facility
                     <input
                       name="last_known_location"
-                      defaultValue={editingSubject?.last_known_location || ''}
+                      defaultValue={stripLocationCoords(editingSubject?.last_known_location || '')}
                       maxLength={240}
                       list="lv-ng-cities"
                       disabled={busy}
@@ -1255,6 +1292,13 @@ export default function SubjectEnrollmentCenter({
                       ))}
                     </datalist>
                   </label>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <LocationPicker
+                      value={subjectLocation}
+                      onChange={setSubjectLocation}
+                      disabled={busy}
+                    />
+                  </div>
                   <label>
                     National ID / NIN / Passport
                     <input name="national_id" defaultValue={editingSubject?.national_id || ''} maxLength={80} disabled={busy} />

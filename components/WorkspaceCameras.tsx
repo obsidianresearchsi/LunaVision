@@ -5,9 +5,11 @@ import CameraChat from './CameraChat';
 import { roleCan } from '../services/videoIntelligence';
 import { CameraStream } from './CameraStream';
 import CameraSourceFields from './CameraSourceFields';
+import {cameraSource,cameraRegistrationError} from '../services/cameraConnection';
+import { LocationPicker, type RecordPosition } from './RecordLocation';
 
-type Camera = { id: string; name: string; location: string; playback_url: string | null; source_configured: boolean; stream_type: 'video' | 'hls' | 'mjpeg'; revision: number; minimum_clearance: number };
-const columns = 'id,name,location,playback_url,source_configured,stream_type,revision,minimum_clearance';
+type Camera = { id: string; name: string; location: string; latitude?: number | null; longitude?: number | null; playback_url: string | null; source_configured: boolean; stream_type: 'video' | 'hls' | 'mjpeg'; revision: number; minimum_clearance: number };
+const columns = 'id,name,location,latitude,longitude,playback_url,source_configured,stream_type,revision,minimum_clearance';
 const playbackLabels = {
   connecting: 'Connecting to the playback endpoint…',
   ready: 'Video is ready to play.',
@@ -48,7 +50,15 @@ export function WorkspaceCameras({
   const [inventoryFailed, setInventoryFailed] = useState(false);
   const [inventoryAttempt, setInventoryAttempt] = useState(0);
   const [query, setQuery] = useState('');
-  const [connectionMode, setConnectionMode] = useState('playback');
+  const [connectionMode, setConnectionMode] = useState('source');
+  const [registrationMessage,setRegistrationMessage]=useState('');
+  const [registrationFailed,setRegistrationFailed]=useState(false);
+  const registrationFeedback=useRef<HTMLParagraphElement>(null);
+  useEffect(()=>{
+    if(registrationMessage){registrationFeedback.current?.scrollIntoView?.({block:'nearest',behavior:'smooth'});registrationFeedback.current?.focus({preventScroll:true});}
+  },[registrationMessage]);
+  const [cameraLocation, setCameraLocation] = useState<RecordPosition | null>(null);
+  const [pinDrafts, setPinDrafts] = useState<Record<string, RecordPosition | null>>({});
   const registrationForm = useRef<HTMLFormElement>(null);
   const registrationId = `camera-registration-${workspaceId}`;
   function showRegistration() {
@@ -128,13 +138,18 @@ export function WorkspaceCameras({
     const fields = new FormData(form);
     setSaving(true);
     setNotice('');
+    setRegistrationMessage('');setRegistrationFailed(false);
     try {
-      if (connectionMode === 'source') {
-        const {error}=await supabase.rpc('lv_register_camera_source',{target_workspace:workspaceId,camera_name:String(fields.get('name')).trim(),
+      const rawUrl=String(fields.get(connectionMode==='source'?'source_url':'url')??'').trim();
+      if (connectionMode === 'source' || /^r(?:ts|st)ps?:/i.test(rawUrl)) {
+        const connection=cameraSource(rawUrl,String(fields.get('source_username')??''),String(fields.get('source_password')??''));
+        const {data,error}=await supabase.rpc('lv_register_camera_source',{target_workspace:workspaceId,camera_name:String(fields.get('name')).trim(),
           camera_location:String(fields.get('location')).trim(),clearance:Number(fields.get('minimum_clearance')),
-          source_url:String(fields.get('source_url')).trim(),source_username:String(fields.get('source_username')),source_password:String(fields.get('source_password'))});
-        if(error)throw new Error('Camera source could not be saved. Check the source URL, access and clearance. Enter credentials separately from the URL.');
-        form.reset();setInventoryAttempt(value=>value+1);setNotice('Camera source saved encrypted in Supabase Vault. Playback awaits gateway configuration.');return;
+          ...connection});
+        if(error)throw new Error(cameraRegistrationError(error));
+        if(!data)throw new Error('The server did not confirm camera registration. Refresh the camera list before retrying.');
+        const result='Camera source saved encrypted in Supabase Vault. Playback awaits gateway configuration.';
+        form.reset();setCameraLocation(null);setInventoryAttempt(value=>value+1);setNotice(result);setRegistrationMessage(result);return;
       }
       const url = new URL(String(fields.get('url')).trim());
       if (url.protocol === 'rtsp:' || url.protocol === 'rtsps:') {
@@ -155,12 +170,26 @@ export function WorkspaceCameras({
         })
         .select(columns)
         .single();
-      if (error) throw new Error('The camera could not be saved.');
-      setCameras((previous) => [...previous, data as Camera]);
+      if (error) throw new Error(cameraRegistrationError(error));
+      let savedCamera = data as Camera;
+      if (cameraLocation) {
+        const { data: geoData, error: geoError } = await supabase
+          .from('lv_cameras')
+          .update({ latitude: cameraLocation.latitude, longitude: cameraLocation.longitude })
+          .eq('workspace_id', workspaceId)
+          .eq('id', savedCamera.id)
+          .select(columns)
+          .single();
+        if (!geoError && geoData) savedCamera = geoData as Camera;
+      }
+      setCameras((previous) => [...previous, savedCamera]);
+      setCameraLocation(null);
       setNotice('Camera registered.');
+      setRegistrationMessage('Camera registered.');
       form.reset();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'The camera could not be saved.');
+      const message=error instanceof Error ? error.message : 'The camera could not be saved.';
+      setNotice(message);setRegistrationMessage(message);setRegistrationFailed(true);
     } finally {
       setSaving(false);
     }
@@ -207,7 +236,74 @@ export function WorkspaceCameras({
         <article key={camera.id}>
           <h3>{camera.name}</h3>
           <p>{camera.location}</p>
-          <p>Clearance {camera.minimum_clearance} · {camera.stream_type?.toUpperCase()}</p>
+          <p>
+            Clearance {camera.minimum_clearance} · {camera.stream_type?.toUpperCase()}
+            {camera.latitude != null && camera.longitude != null && (
+              <> · <span className="lv-badge">GPS {camera.latitude.toFixed(4)}, {camera.longitude.toFixed(4)}</span></>
+            )}
+          </p>
+          {canConfigure && (
+            <details style={{ marginBottom: '0.5rem' }}>
+              <summary>Map GPS location</summary>
+              <div style={{ marginTop: '0.45rem' }}>
+                <LocationPicker
+                  value={
+                    pinDrafts[camera.id] !== undefined
+                      ? pinDrafts[camera.id]
+                      : camera.latitude != null && camera.longitude != null
+                        ? { latitude: camera.latitude, longitude: camera.longitude }
+                        : null
+                  }
+                  onChange={(pos) => setPinDrafts((prev) => ({ ...prev, [camera.id]: pos }))}
+                  disabled={saving}
+                />
+                <button
+                  type="button"
+                  className="lv-secondary"
+                  disabled={saving}
+                  style={{ marginTop: '0.45rem' }}
+                  onClick={async () => {
+                    if (saving) return;
+                    const draft =
+                      pinDrafts[camera.id] !== undefined
+                        ? pinDrafts[camera.id]
+                        : camera.latitude != null && camera.longitude != null
+                          ? { latitude: camera.latitude, longitude: camera.longitude }
+                          : null;
+                    setSaving(true);
+                    setNotice('');
+                    try {
+                      const { error } = await supabase
+                        .from('lv_cameras')
+                        .update({
+                          latitude: draft?.latitude ?? null,
+                          longitude: draft?.longitude ?? null,
+                        })
+                        .eq('workspace_id', workspaceId)
+                        .eq('id', camera.id)
+                        .select('id')
+                        .single();
+                      if (error) throw new Error(error.message);
+                      setCameras((prev) =>
+                        prev.map((item) =>
+                          item.id === camera.id
+                            ? { ...item, latitude: draft?.latitude ?? null, longitude: draft?.longitude ?? null }
+                            : item,
+                        ),
+                      );
+                      setNotice(draft ? `Map location pinned for "${camera.name}".` : `Map location cleared for "${camera.name}".`);
+                    } catch (err) {
+                      setNotice(err instanceof Error ? err.message : 'Camera map location could not be updated.');
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
+                  Save map location
+                </button>
+              </div>
+            </details>
+          )}
           {!camera.playback_url && <p>{camera.source_configured ? 'Encrypted source saved. Waiting for a gateway playback URL.' : 'No playback URL configured.'}</p>}
           <div className="lv-video-actions">
             <button
@@ -331,7 +427,7 @@ export function WorkspaceCameras({
         )}
       </details>
       {canAdd && (
-        <form id={registrationId} ref={registrationForm} onSubmit={add} aria-label="Register a camera">
+        <form id={registrationId} ref={registrationForm} onSubmit={add} aria-label="Register a camera" onInvalidCapture={()=>{setRegistrationFailed(true);setRegistrationMessage('Check the required camera name and URL fields before saving.');}}>
           <h3>Add a camera</h3>
           <label>Connection setup<select value={connectionMode} onChange={event=>setConnectionMode(event.target.value)}>
             <option value="playback">Browser-ready playback URL</option><option value="source">IP camera URL + encrypted credentials</option>
@@ -344,6 +440,7 @@ export function WorkspaceCameras({
             Location
             <input name="location" maxLength={200} />
           </label>
+          <LocationPicker value={cameraLocation} onChange={setCameraLocation} disabled={saving || loading} />
           {connectionMode === 'playback' && <label>
             Stream format
             <select name="stream_type"><option value="video">MP4 / WebM video</option><option value="hls">HLS camera gateway (.m3u8)</option><option value="mjpeg">MJPEG live feed</option></select>
@@ -355,6 +452,7 @@ export function WorkspaceCameras({
             <input name="url" type="url" required maxLength={2048} />
           </label>}
           <button disabled={saving || loading}>{saving ? 'Saving camera…' : 'Register camera'}</button>
+          {registrationMessage&&<p ref={registrationFeedback} tabIndex={-1} role={registrationFailed?'alert':'status'}>{registrationMessage}</p>}
         </form>
       )}
     </section>

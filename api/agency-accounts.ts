@@ -1,5 +1,32 @@
 import { randomBytes } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import { toDbModuleScopes } from '../services/workspaceModules';
+
+const VALID_MODULE_IDS = new Set([
+  'monitor',
+  'analytics',
+  'records',
+  'evidence',
+  'vehicles',
+  'access',
+  'command',
+  'intelligence',
+  'cameras',
+  'camera_config',
+  'playback',
+  'alerts',
+  'vehicle_registry',
+  'fleet',
+  'rules',
+  'overview',
+  'gallery',
+  'intel',
+  'enrollment',
+  'search_history',
+  'watchlist',
+  'history',
+  'faces',
+]);
 
 function json(status: number, data: object) {
   return Response.json(data, { status, headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
@@ -41,8 +68,8 @@ export async function issueAgencyAccount(request: Request, env: Record<string, s
     if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(target) ||
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
         !['member','viewer','investigator','supervisor','admin'].includes(role) || input?.verified !== true ||
-        !Number.isInteger(clearance) || clearance < 0 || clearance > 3 || !Array.isArray(modules) || modules.length > 6 ||
-        modules.some(value => !['monitor','analytics','records','evidence','vehicles','access'].includes(value))) {
+        !Number.isInteger(clearance) || clearance < 0 || clearance > 3 || !Array.isArray(modules) || modules.length > 25 ||
+        modules.some((value: unknown) => typeof value !== 'string' || !VALID_MODULE_IDS.has(value))) {
       return json(400, { error: 'Choose valid staff access and confirm that the recipient and email were verified.' });
     }
     const agency = await caller.from('lv_workspaces').select('id,kind').eq('id', target).eq('active', true).maybeSingle();
@@ -54,14 +81,27 @@ export async function issueAgencyAccount(request: Request, env: Record<string, s
     if ((!isPlatform && clearance > member.data.clearance) || (role === 'admin' && !isPlatform && member.data.role !== 'owner'))
       return json(403,{error:'You cannot grant a role or clearance above your authority.'});
     callback.pathname = agency.data.kind === 'business' ? '/business' : '/agency';
-    const grantInput = {target,email_address:email,access_role:role,access_clearance:clearance,modules};
+    const isBiz = agency.data.kind === 'business';
+    const grantWithFallback = async () => {
+      let res = await caller.rpc('lv_set_staff_access', {target,email_address:email,access_role:role,access_clearance:clearance,modules});
+      if (res.error && res.error.message.includes('Invalid role, clearance or module access')) {
+        res = await caller.rpc('lv_set_staff_access', {
+          target,
+          email_address: email,
+          access_role: role,
+          access_clearance: clearance,
+          modules: toDbModuleScopes(modules, isBiz),
+        });
+      }
+      return res;
+    };
 
     const admin = createClient(url, serviceKey, { auth });
     const created = await admin.auth.admin.createUser({
       email, password: randomBytes(32).toString('base64url'), email_confirm: true,
     });
     if (created.error?.code === 'email_exists' || created.error?.code === 'user_already_exists') {
-      const grant = await caller.rpc('lv_set_staff_access', grantInput);
+      const grant = await grantWithFallback();
       return grant.error
         ? json(409, { error: 'This account already exists. Check that its email is confirmed and that its membership can be changed.' })
         : json(200, { existing: true });
@@ -73,7 +113,7 @@ export async function issueAgencyAccount(request: Request, env: Record<string, s
     if (link.error || !link.data.properties?.action_link) {
       return json(502, { error: 'The account was created without agency access. Generate a setup link in Supabase Auth before assigning a role.' });
     }
-    const grant = await caller.rpc('lv_set_staff_access', grantInput);
+    const grant = await grantWithFallback();
     if (grant.error) return json(409, { error: 'The account was created but agency access was not granted. Review agency status and use Personnel access.' });
     return json(201, { setupLink: link.data.properties.action_link });
   } catch {

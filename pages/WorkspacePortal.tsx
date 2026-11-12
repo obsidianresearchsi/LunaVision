@@ -23,6 +23,7 @@ import SubjectEnrollmentCenter from '../components/SubjectEnrollmentCenter';
 import LiveAlertPopupHost from '../components/LiveAlertPopup';
 import { subscribeAlertsChanged } from '../services/liveAlertBus';
 import { defaultFeatureMap, WorkspaceFeatureMap } from '../services/videoIntelligence';
+import { isPanelPermitted } from '../services/workspaceModules';
 import {
   Activity,
   ArrowLeft,
@@ -66,8 +67,8 @@ type PlatformOrg = {
   features: WorkspaceFeatureMap;
 };
 type RecordStatus = 'open' | 'in_review' | 'resolved';
-type RecordRow = { id: string; title: string; details: string; category: string; status: RecordStatus; created_at: string; latitude?: number | null; longitude?: number | null };
-const recordColumns = 'id,title,details,category,status,created_at,latitude,longitude';
+type RecordRow = { id: string; title: string; details: string; category: string; status: RecordStatus; minimum_clearance?: number; created_at: string; latitude?: number | null; longitude?: number | null };
+const recordColumns = 'id,title,details,category,status,minimum_clearance,created_at,latitude,longitude';
 const statusLabel = { open: 'Open', in_review: 'In review', resolved: 'Resolved' };
 const statusActions = { open: ['in_review', 'resolved'], in_review: ['open', 'resolved'], resolved: ['open'] } as const;
 const portalEnabled = workspaceEnabled && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED === 'true';
@@ -94,15 +95,15 @@ const panelIcons = {
   history: Activity,
 };
 
+const statusOrder: RecordStatus[] = ['open', 'in_review', 'resolved'];
+
 function RecordActivity({ recordId, status }: { recordId: string; status: RecordStatus }) {
-  const [open, setOpen] = useState(false);
   const [items, setItems] = useState<{ id: number; previous_status: RecordStatus; next_status: RecordStatus; created_at: string }[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!open) return;
     let active = true;
     setLoading(true);
     setFailed(false);
@@ -122,34 +123,98 @@ function RecordActivity({ recordId, status }: { recordId: string; status: Record
     return () => {
       active = false;
     };
-  }, [open, recordId, status, attempt]);
+  }, [recordId, status, attempt]);
+
+  const currentIdx = Math.max(0, statusOrder.indexOf(status));
 
   return (
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>Status history</summary>
-      {open &&
-        (loading ? (
-          <p>Loading status history…</p>
-        ) : failed ? (
-          <p role="alert">
-            Status history could not be loaded.{' '}
-            <button type="button" className="lv-secondary" onClick={() => setAttempt((value) => value + 1)}>
-              Retry
-            </button>
-          </p>
-        ) : !items.length ? (
-          <p>No status transitions recorded yet.</p>
-        ) : (
-          items.map((item) => (
-            <p key={item.id}>
-              <small>
-                {statusLabel[item.previous_status] ?? item.previous_status} → {statusLabel[item.next_status] ?? item.next_status} ·{' '}
-                {new Date(item.created_at).toLocaleString()}
+    <div
+      style={{
+        marginTop: '0.75rem',
+        padding: '0.75rem',
+        borderRadius: '8px',
+        background: '#081018',
+        border: '1px solid #1e2d3d',
+      }}
+      aria-label="Case status history"
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
+        <strong style={{ fontSize: '0.84rem', letterSpacing: '0.02em', color: '#cbd5e1' }}>
+          Status history &amp; review pipeline
+        </strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+          {statusOrder.map((step, idx) => {
+            const activeStep = step === status;
+            const passed = idx < currentIdx;
+            const stepColor =
+              step === 'resolved'
+                ? '#2dd4bf'
+                : step === 'in_review'
+                  ? '#f59e0b'
+                  : '#60a5fa';
+            return (
+              <React.Fragment key={step}>
+                <span
+                  className="lv-badge"
+                  style={{
+                    borderColor: activeStep ? stepColor : passed ? '#334155' : '#1e293b',
+                    background: activeStep ? `${stepColor}22` : passed ? '#0f172a' : 'transparent',
+                    color: activeStep ? stepColor : passed ? '#cbd5e1' : '#64748b',
+                    fontWeight: activeStep ? 700 : 500,
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  {idx + 1}. {statusLabel[step]}
+                </span>
+                {idx < statusOrder.length - 1 && (
+                  <span aria-hidden="true" style={{ color: '#475569', fontSize: '0.78rem' }}>
+                    →
+                  </span>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+      {loading ? (
+        <p style={{ margin: 0, fontSize: '0.82rem', color: '#94a3b8' }}>Loading status history…</p>
+      ) : failed ? (
+        <p role="alert" style={{ margin: 0, fontSize: '0.82rem' }}>
+          Status history could not be loaded.{' '}
+          <button type="button" className="lv-secondary" onClick={() => setAttempt((value) => value + 1)}>
+            Retry
+          </button>
+        </p>
+      ) : !items.length ? (
+        <p style={{ margin: 0, fontSize: '0.82rem', color: '#94a3b8' }}>
+          No status transitions recorded yet · Currently in <strong>{statusLabel[status]}</strong> stage.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.35rem' }}>
+          {items.map((item) => (
+            <li
+              key={item.id}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                padding: '0.35rem 0.55rem',
+                borderRadius: '6px',
+                background: '#0d1722',
+                borderLeft: `3px solid ${item.next_status === 'resolved' ? '#2dd4bf' : item.next_status === 'in_review' ? '#f59e0b' : '#60a5fa'}`,
+              }}
+            >
+              <small style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                {statusLabel[item.previous_status] ?? item.previous_status} → {statusLabel[item.next_status] ?? item.next_status}
               </small>
-            </p>
-          ))
-        ))}
-    </details>
+              <small style={{ color: '#94a3b8' }}>{new Date(item.created_at).toLocaleString()}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -561,12 +626,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     );
 
   const canManage = (platformView && admin) || membership?.role === 'owner' || membership?.role === 'admin';
-  const panelModules: Record<string,string> = {command:'monitor',cameras:'monitor',fleet:'monitor',intel:'monitor',alerts:'monitor',
-    camera_config:'monitor',playback:'analytics',history:'analytics',intelligence:'analytics',rules:'analytics',records:'records',
-    evidence:'evidence',vehicles:'vehicles',watchlist:'vehicles',vehicle_registry:'vehicles',access:'access',officers:'access',
-    faces:'records',gallery:'records',enrollment:'records',search_history:'records',crawler:'records',crawled_faces:'records'};
-  const canOpenPanel = (id: string) => canManage || !panelModules[id] || !membership?.allowed_modules
-    || membership.allowed_modules.includes(panelModules[id]);
+  const canOpenPanel = (id: string) => isPanelPermitted(id, membership?.allowed_modules, canManage);
   const minPasswordLength = platformView ? 16 : 12;
 
   const businessPanels = [
@@ -606,7 +666,12 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           ['history', 'Detection history'],
         ]
       : []),
-    ...(canManage ? [['access', 'Agency personnel']] : []),
+    ...(canManage
+      ? [
+          ['access', 'Access & audit'],
+          ['officers', 'Officer management'],
+        ]
+      : []),
     ['password', 'Change password'],
   ];
 
@@ -706,7 +771,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
             label: 'Administer',
             items: [
               { id: 'access', label: 'Access & audit', icon: FileText },
-              { id: 'integrations', label: 'Integrations', icon: Shield },
+              { id: 'officers', label: 'Officer management', icon: Users },
             ],
           },
         ]
@@ -722,10 +787,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         { id: 'history', label: 'Detection history', icon: Activity },
         ...(canManage
           ? [
-              { id: 'officers', label: 'Officer management', icon: Users },
               { id: 'crawler', label: 'Web crawler', icon: Globe },
               { id: 'crawled_faces', label: 'Crawled faces', icon: Database },
-              { id: 'configuration', label: 'Configuration', icon: Settings },
             ]
           : []),
         { id: 'faces', label: 'Face comparison', icon: ScanFace },
@@ -1113,10 +1176,11 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                 )}
                 {canManage && ['access', 'officers'].includes(panel) && (
                   <WorkspaceAccess
-                    key={account + workspace.id}
+                    key={account + workspace.id + panel}
                     workspace={workspace}
                     platform={platformView && admin}
                     role={membership?.role}
+                    viewMode={platformView ? 'full' : panel === 'officers' ? 'officers' : agency ? 'audit' : 'full'}
                     onUpdated={loadWorkspaces}
                   />
                 )}
@@ -1211,11 +1275,11 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                     }}
                   />
                 )}
-                {!platformView && isMember && agency && ['alerts', 'evidence', 'rules', 'fleet', 'integrations', 'configuration'].includes(panel) && (
+                {!platformView && isMember && agency && ['alerts', 'evidence', 'rules', 'fleet'].includes(panel) && (
                   <AgencyOperations
                     key={account + selected + panel}
                     workspaceId={selected}
-                    mode={(panel === 'configuration' ? 'integrations' : panel) as 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations'}
+                    mode={panel as 'alerts' | 'evidence' | 'rules' | 'fleet'}
                     agency
                     canManage={canManage}
                     role={membership?.role}
@@ -1348,65 +1412,145 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                         !filteredRecords.length && <p>No records match these filters.</p>
                       )}
                       {recordScope === account + selected &&
-                        filteredRecords.map((record) => (
-                          <article key={record.id}>
-                            <small>
-                              {record.category} · {new Date(record.created_at).toLocaleDateString()}
-                            </small>
-                            <h3>{record.title}</h3>
-                            <p>{record.details}</p>
-                            <RecordLocationEditor workspaceId={selected} record={record} readOnly={membership?.role === 'viewer'} onUpdated={position => setRecords(previous => previous.map(item => item.id === record.id ? {...item, latitude:position?.latitude??null, longitude:position?.longitude??null} : item))}/>
-                            {record.category !== 'site' && (
-                              <>
-                                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
-                                  <span className="lv-badge" style={{ borderColor: record.status === 'resolved' ? '#2dd4bf' : '#f59e0b', fontWeight: 700 }}>
-                                    Status: {statusLabel[record.status]}
+                        filteredRecords.map((record) => {
+                          const statusColor =
+                            record.status === 'resolved'
+                              ? '#2dd4bf'
+                              : record.status === 'in_review'
+                                ? '#f59e0b'
+                                : '#60a5fa';
+                          const caseCode = `${record.category === 'site' ? 'SITE' : record.category === 'incident' ? 'INC' : 'CASE'}-${String(record.id).slice(0, 8).toUpperCase()}`;
+                          return (
+                            <article
+                              key={record.id}
+                              data-folder-case={caseCode}
+                              style={{
+                                borderRadius: '0 10px 10px 10px',
+                                border: '1px solid #243447',
+                                borderLeft: `4px solid ${statusColor}`,
+                                background: '#0b121a',
+                                overflow: 'hidden',
+                                marginTop: '1.1rem',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  flexWrap: 'wrap',
+                                  gap: '0.5rem',
+                                  padding: '0.45rem 0.9rem',
+                                  background: '#111d29',
+                                  borderBottom: '1px solid #1e2d3d',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                  <span
+                                    className="lv-badge"
+                                    style={{
+                                      background: '#182838',
+                                      borderColor: '#364f68',
+                                      fontFamily: 'monospace',
+                                      fontWeight: 700,
+                                      letterSpacing: '0.04em',
+                                    }}
+                                  >
+                                    {caseCode}
                                   </span>
-                                  {record.status !== 'resolved' && (
-                                    <button
-                                      type="button"
-                                      disabled={busy || membership?.role === 'viewer'}
-                                      onClick={() => {
-                                        setBusy(true);
-                                        setNotice('');
-                                        void transitionRecordStatus(record, 'resolved')
-                                          .then(() => setNotice(`Case "${record.title}" resolved.`))
-                                          .catch((err) => setNotice(err instanceof Error ? err.message : 'Could not resolve incident.'))
-                                          .finally(() => setBusy(false));
+                                  <small style={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.72rem' }}>
+                                    {record.category === 'investigation' ? 'Investigation Dossier' : record.category === 'incident' ? 'Incident Dossier' : 'Site Record'} · Filed {new Date(record.created_at).toLocaleDateString()}
+                                  </small>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                  {record.minimum_clearance > 0 && (
+                                    <span className="lv-badge">L{record.minimum_clearance}</span>
+                                  )}
+                                  {record.category !== 'site' && (
+                                    <span
+                                      className="lv-badge"
+                                      style={{
+                                        borderColor: statusColor,
+                                        background: `${statusColor}1f`,
+                                        color: statusColor,
+                                        fontWeight: 700,
                                       }}
                                     >
-                                      Resolve case
-                                    </button>
+                                      {statusLabel[record.status]}
+                                    </span>
                                   )}
                                 </div>
-                                <form
-                                  onSubmit={(event) =>
-                                    submit(event, async (fields) => {
-                                      const nextStatus = String(fields.get('status') || '') as RecordStatus;
-                                      await transitionRecordStatus(record, nextStatus);
-                                    })
+                              </div>
+                              <div style={{ padding: '0.9rem' }}>
+                                <h3 style={{ marginTop: 0 }}>{record.title}</h3>
+                                <p>{record.details}</p>
+                                <RecordLocationEditor
+                                  workspaceId={selected}
+                                  record={record}
+                                  readOnly={membership?.role === 'viewer'}
+                                  onUpdated={(position) =>
+                                    setRecords((previous) =>
+                                      previous.map((item) =>
+                                        item.id === record.id
+                                          ? { ...item, latitude: position?.latitude ?? null, longitude: position?.longitude ?? null }
+                                          : item,
+                                      ),
+                                    )
                                   }
-                                >
-                                  <label>
-                                    {statusLabel[record.status]}
-                                    <select name="status" aria-label={'New status for ' + record.title}>
-                                      {statusActions[record.status].map((status) => (
-                                        <option key={status} value={status}>
-                                          {statusLabel[status]}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <button className="lv-secondary" disabled={busy}>
-                                    Update status
-                                  </button>
-                                </form>
-                                <RecordActivity recordId={record.id} status={record.status} />
-                              </>
-                            )}
-                            {!agency && record.category === 'incident' && <CorrectiveActions incidentId={record.id} />}
-                          </article>
-                        ))}
+                                />
+                                {record.category !== 'site' && (
+                                  <>
+                                    <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+                                      <span className="lv-badge" style={{ borderColor: statusColor, fontWeight: 700 }}>
+                                        Status: {statusLabel[record.status]}
+                                      </span>
+                                      {record.status !== 'resolved' && (
+                                        <button
+                                          type="button"
+                                          disabled={busy || membership?.role === 'viewer'}
+                                          onClick={() => {
+                                            setBusy(true);
+                                            setNotice('');
+                                            void transitionRecordStatus(record, 'resolved')
+                                              .then(() => setNotice(`Case "${record.title}" resolved.`))
+                                              .catch((err) => setNotice(err instanceof Error ? err.message : 'Could not resolve incident.'))
+                                              .finally(() => setBusy(false));
+                                          }}
+                                        >
+                                          Resolve case
+                                        </button>
+                                      )}
+                                    </div>
+                                    <form
+                                      onSubmit={(event) =>
+                                        submit(event, async (fields) => {
+                                          const nextStatus = String(fields.get('status') || '') as RecordStatus;
+                                          await transitionRecordStatus(record, nextStatus);
+                                        })
+                                      }
+                                    >
+                                      <label>
+                                        {statusLabel[record.status]}
+                                        <select name="status" aria-label={'New status for ' + record.title}>
+                                          {statusActions[record.status].map((status) => (
+                                            <option key={status} value={status}>
+                                              {statusLabel[status]}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <button className="lv-secondary" disabled={busy}>
+                                        Update status
+                                      </button>
+                                    </form>
+                                    <RecordActivity recordId={record.id} status={record.status} />
+                                  </>
+                                )}
+                                {!agency && record.category === 'incident' && <CorrectiveActions incidentId={record.id} />}
+                              </div>
+                            </article>
+                          );
+                        })}
                     </section>
                     <section className="lv-card">
                       <h2>{agency ? 'Record an investigation' : 'Add a site or incident'}</h2>

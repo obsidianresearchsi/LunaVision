@@ -286,17 +286,17 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     await act(async () => { playbackBtn.click(); });
     expect(host.textContent).toContain('Mock VideoAnalysis biz-1');
 
-    // Open Sites & incidents and test filters + Status history
+    // Open Sites & incidents and verify always-visible Status history without needing collapsed toggle
     const recordsBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(b => b.textContent?.trim() === 'Sites & incidents')!;
     await act(async () => { recordsBtn.click(); });
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
     expect(host.textContent).toContain('North Gate Perimeter');
     expect(host.textContent).toContain('Forklift collision');
-
-    const statusHistoryDetails = host.querySelector('details')!;
-    await act(async () => {
-      statusHistoryDetails.open = true;
-      statusHistoryDetails.dispatchEvent(new Event('toggle'));
-    });
+    expect(host.textContent).toContain('Status history & review pipeline');
     expect(host.textContent).toContain('Open → In review');
   });
 
@@ -323,22 +323,68 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     expect(host.textContent).toContain('Issue an account for Lagos State Command');
   });
 
-  it('renders Agency Security Dashboard with distinct Configuration item, Incident status history, and explicit pending notices', async () => {
+  it('renders Agency Security Dashboard with hidden Configuration/Integrations, folder-style Cases, and separated Access & audit vs Officer management', async () => {
     setupMockDb({
       workspaces: [{ id: 'ag-1', name: 'Lagos State Command', kind: 'agency', active: true, entitlement: 'Tier 1', organization_details: '' }],
       memberships: [{ workspace_id: 'ag-1', role: 'admin' }],
       records: [
-        { id: 'inv-1', title: 'Apapa Corridor Case', details: 'Vehicle sighting inquiry', category: 'investigation', status: 'open', created_at: '2026-11-11T09:00:00Z' },
+        { id: 'inv-1', title: 'Apapa Corridor Case', details: 'Vehicle sighting inquiry', category: 'investigation', status: 'in_review', created_at: '2026-11-11T09:00:00Z' },
+      ],
+      recordActivity: [
+        { id: 10, previous_status: 'open', next_status: 'in_review', created_at: '2026-11-11T10:00:00Z' },
       ],
     });
 
     await renderAndFlush(<WorkspacePortalComp agency={true} platformView={false} />);
 
     expect(host.textContent).toContain('Lagos State Command');
-    const configBtn = host.querySelector('button[aria-label="Configuration"]') as HTMLButtonElement;
-    const integrationsBtn = host.querySelector('button[aria-label="Integrations"]') as HTMLButtonElement;
-    expect(configBtn).toBeTruthy();
-    expect(integrationsBtn).toBeTruthy();
+    expect(host.querySelector('button[aria-label="Configuration"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Integrations"]')).toBeNull();
+    const officersBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
+      (b) => b.getAttribute('aria-label') === 'Officer management',
+    ) as HTMLButtonElement;
+    const accessBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
+      (b) => b.getAttribute('aria-label') === 'Access & audit',
+    ) as HTMLButtonElement;
+    expect(officersBtn).toBeTruthy();
+    expect(accessBtn).toBeTruthy();
+    const administerSection = Array.from(host.querySelectorAll('nav section')).find(
+      (s) => s.querySelector('h2')?.textContent?.trim() === 'Administer',
+    );
+    expect(administerSection?.textContent).toContain('Officer management');
+    expect(administerSection?.textContent).toContain('Access & audit');
+
+    // Verify Incidents render in folder-style dossiers with visible status history pipeline
+    const invBtn = host.querySelector('button[aria-label="Incidents"]') as HTMLButtonElement;
+    expect(invBtn).toBeTruthy();
+    await act(async () => { invBtn.click(); });
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    expect(host.querySelector('[data-folder-case="CASE-INV-1"]')).toBeTruthy();
+    expect(host.textContent).toContain('Status history & review pipeline');
+    expect(host.textContent).toContain('Open → In review');
+
+    // Verify Access & audit only shows audit logs (no account creation) while Officer management handles accounts + sidebar pages
+    await act(async () => { accessBtn.click(); });
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    expect(host.textContent).toContain('Access & Security Audit Logs');
+    expect(host.textContent).not.toContain('Officer Account Provisioning & Page Access');
+
+    await act(async () => { officersBtn.click(); });
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    expect(host.textContent).toContain('Officer Account Provisioning & Page Access');
+    expect(host.textContent).toContain('Select all pages');
 
     // Open Enroll subject and verify live police/convict biometric booking form renders immediately
     const enrollBtn = host.querySelector('button[aria-label="Enroll subject"]') as HTMLButtonElement;

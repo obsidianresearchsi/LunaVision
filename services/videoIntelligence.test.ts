@@ -284,4 +284,26 @@ describe('videoIntelligence service', () => {
       unsub();
     }
   });
+
+  it('parses subject coordinates and enforces granular non-admin sidebar page modules', async () => {
+    const { formatLocationWithCoords, parseSubjectLocation, stripLocationCoords } = await import('./locationUtils');
+    const { AGENCY_SIDEBAR_MODULES, isPanelPermitted, toDbModuleScopes } = await import('./workspaceModules');
+
+    const stored = formatLocationWithCoords('Apapa Port Gate', { latitude: 6.4474, longitude: 3.3592 });
+    expect(stored).toContain('[6.44740, 3.35920]');
+    expect(stripLocationCoords(stored)).toBe('Apapa Port Gate');
+    const parsedStored = parseSubjectLocation(stored);
+    expect(parsedStored.latitude).toBeCloseTo(6.4474, 4);
+    expect(parsedStored.longitude).toBeCloseTo(3.3592, 4);
+    const parsedAbuja = parseSubjectLocation('Abuja Central');
+    expect(parsedAbuja.latitude).toBeCloseTo(9.0765, 4);
+    expect(parsedAbuja.longitude).toBeCloseTo(7.3986, 4);
+
+    expect(AGENCY_SIDEBAR_MODULES.some((m) => m.id === 'access' || m.id === 'officers' || m.id === 'configuration' || m.id === 'integrations')).toBe(false);
+    expect(toDbModuleScopes(['command', 'cameras', 'gallery', 'vehicles'], false)).toEqual(['monitor', 'records', 'vehicles']);
+    expect(isPanelPermitted('cameras', ['cameras', 'gallery'], false)).toBe(true);
+    expect(isPanelPermitted('records', ['cameras', 'gallery'], false)).toBe(false);
+    expect(isPanelPermitted('access', ['cameras', 'gallery'], false)).toBe(false);
+    expect(isPanelPermitted('officers', ['cameras'], true)).toBe(true);
+  });
 });

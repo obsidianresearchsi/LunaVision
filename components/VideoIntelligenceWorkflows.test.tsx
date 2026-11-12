@@ -667,5 +667,80 @@ describe('Video Intelligence UI Workflows', () => {
     });
     expect(host.textContent).toContain('Your current account role ("member") cannot enroll biometric subjects.');
   });
+
+  it('WorkspaceAccess separates Officer management (paginated + sidebar pages) from Audit Logs console', async () => {
+    const manyStaff = Array.from({ length: 8 }, (_, idx) => ({
+      user_id: `u-${idx + 1}`,
+      email: `officer${idx + 1}@agency.gov.ng`,
+      role: idx === 0 ? 'owner' : 'investigator',
+      clearance: idx === 0 ? 3 : 1,
+      allowed_modules: ['command', 'gallery'],
+    }));
+    const manyLogs = Array.from({ length: 15 }, (_, idx) => ({
+      id: idx + 1,
+      actor_id: 'u-1',
+      subject_id: 'u-2',
+      action: idx % 2 === 0 ? 'subject_enrolled' : 'staff_access_updated',
+      details: { target_role: 'investigator' },
+      created_at: new Date(Date.UTC(2026, 10, 12, 10, idx)).toISOString(),
+    }));
+
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'lv_workspace_staff_access' || fn === 'lv_workspace_staff') {
+        return Promise.resolve({ data: manyStaff, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'lv_workspace_activity') return makeChain(manyLogs);
+      return makeChain([]);
+    });
+
+    const { default: WorkspaceAccess } = await import('./WorkspaceAccess');
+
+    // Audit mode: detailed paginated logs ONLY, no account creation
+    await act(async () => {
+      root.render(
+        <WorkspaceAccess
+          workspace={{ id: 'ws-ag', name: 'Lagos Command', kind: 'agency', active: true, entitlement: 'Full' }}
+          platform={false}
+          role="admin"
+          viewMode="audit"
+          onUpdated={async () => {}}
+        />,
+      );
+    });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Access & Security Audit Logs');
+    expect(host.textContent).toContain('Total audit records15');
+    expect(host.textContent).toContain('Page 1 of 2');
+    expect(host.textContent).not.toContain('Officer Account Provisioning & Page Access');
+
+    // Officer management mode: paginated personnel + sidebar page module checkboxes (excluding admin pages)
+    await act(async () => {
+      root.render(
+        <WorkspaceAccess
+          workspace={{ id: 'ws-ag', name: 'Lagos Command', kind: 'agency', active: true, entitlement: 'Full' }}
+          platform={false}
+          role="admin"
+          viewMode="officers"
+          onUpdated={async () => {}}
+        />,
+      );
+    });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Officer Account Provisioning & Page Access');
+    expect(host.textContent).toContain('Personnel directory (8)');
+    expect(host.textContent).toContain('Page 1 of 2');
+    expect(host.textContent).toContain('Face search');
+    expect(host.textContent).not.toContain('Access & Security Audit Logs');
+    const modCheckboxes = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"][name="modules"]')).map((c) => c.value);
+    expect(modCheckboxes).toContain('command');
+    expect(modCheckboxes).toContain('gallery');
+    expect(modCheckboxes).not.toContain('access');
+    expect(modCheckboxes).not.toContain('officers');
+    expect(modCheckboxes).not.toContain('configuration');
+    expect(modCheckboxes).not.toContain('integrations');
+  });
 });
 

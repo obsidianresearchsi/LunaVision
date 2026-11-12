@@ -2,14 +2,15 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { basemap, commandBasemap } from '../services/mapConfig';
 import { supabase } from '../services/supabase';
+import { formatLocationWithCoords, parseSubjectLocation } from '../services/locationUtils';
 
 type MapItem = {
-  id: string; kind: 'camera' | 'investigation'; title: string;
-  detail: string; status?: string; latitude: number | null; longitude: number | null;
+  id: string; kind: 'camera' | 'investigation' | 'subject'; title: string;
+  detail: string; rawLocation?: string; status?: string; latitude: number | null; longitude: number | null;
 };
 
 const statuses = { open: 'Open', in_review: 'In review', resolved: 'Resolved' };
-const colors = { camera: '#76efd6', investigation: '#ffc485' };
+const colors = { camera: '#76efd6', investigation: '#ffc485', subject: '#f43f5e' };
 
 export default function AgencyCommandMap({ workspaceId, canManageCameras, openCamera, commandView = false }: {
   workspaceId: string; canManageCameras: boolean; openCamera: (id: string) => void; commandView?: boolean;
@@ -64,16 +65,34 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
       supabase.from('lv_cameras').select('id,name,location,latitude,longitude').eq('workspace_id', workspaceId).order('name'),
       supabase.from('lv_records').select('id,title,status,latitude,longitude').eq('workspace_id', workspaceId)
         .eq('category', 'investigation').order('created_at', { ascending: false }),
-    ]).then(([cameras, records]) => {
+      supabase.from('lv_agency_subjects').select('*').eq('workspace_id', workspaceId).order('created_at', { ascending: false }),
+    ]).then(([cameras, records, subjectsRes]) => {
       if (!active) return;
       setLoading(false);
       if (cameras.error || records.error) { setLoadError(true); return; }
+      const subjectRows = !subjectsRes.error && Array.isArray(subjectsRes.data) ? subjectsRes.data : [];
       setItems([
         ...cameras.data.map(camera => ({ id: camera.id, kind: 'camera' as const, title: camera.name,
           detail: camera.location, latitude: camera.latitude, longitude: camera.longitude })),
         ...records.data.map(record => ({ id: record.id, kind: 'investigation' as const, title: record.title,
           detail: statuses[record.status as keyof typeof statuses] ?? record.status, status: record.status,
           latitude: record.latitude, longitude: record.longitude })),
+        ...subjectRows.map((subject: Record<string, any>) => {
+          const coords = parseSubjectLocation(subject.last_known_location, subject.latitude, subject.longitude);
+          const cleanLoc = coords.displayLocation;
+          const codeLabel = subject.subject_code ? `${subject.subject_code} · ` : '';
+          const threat = subject.threat_level ? ` (${String(subject.threat_level).toUpperCase()})` : '';
+          return {
+            id: String(subject.id),
+            kind: 'subject' as const,
+            title: `${subject.full_name || 'Enrolled subject'}${threat}`,
+            detail: `${codeLabel}${cleanLoc || String(subject.category || 'subject').replace(/_/g, ' ')}`,
+            rawLocation: String(subject.last_known_location || ''),
+            status: String(subject.status || 'active'),
+            latitude: coords?.latitude ?? null,
+            longitude: coords?.longitude ?? null,
+          };
+        }),
       ]);
     });
     return () => { active = false; };
@@ -109,14 +128,34 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
     const fields = new FormData(event.currentTarget);
     const latitude = Number(fields.get('latitude'));
     const longitude = Number(fields.get('longitude'));
-    const table = selected.kind === 'camera' ? 'lv_cameras' : 'lv_records';
     setSaving(true);
     setNotice('');
     try {
-      const { data, error } = await supabase.from(table).update({ latitude, longitude })
-        .eq('workspace_id', workspaceId).eq('id', selected.id).select('id').single();
-      if (error || !data) throw error;
-      setItems(previous => previous.map(item => item.id === selected.id ? { ...item, latitude, longitude } : item));
+      if (selected.kind === 'subject') {
+        const nextLocation = formatLocationWithCoords(selected.rawLocation || selected.detail, { latitude, longitude });
+        const { data: colData, error: colErr } = await supabase
+          .from('lv_agency_subjects')
+          .update({ latitude, longitude, last_known_location: nextLocation })
+          .eq('workspace_id', workspaceId)
+          .eq('id', selected.id)
+          .select('id')
+          .single();
+        if (colErr || !colData) {
+          const { error: locErr } = await supabase
+            .from('lv_agency_subjects')
+            .update({ last_known_location: nextLocation })
+            .eq('workspace_id', workspaceId)
+            .eq('id', selected.id);
+          if (locErr) throw locErr;
+        }
+        setItems(previous => previous.map(item => item.id === selected.id ? { ...item, latitude, longitude, rawLocation: nextLocation } : item));
+      } else {
+        const table = selected.kind === 'camera' ? 'lv_cameras' : 'lv_records';
+        const { data, error } = await supabase.from(table).update({ latitude, longitude })
+          .eq('workspace_id', workspaceId).eq('id', selected.id).select('id').single();
+        if (error || !data) throw error;
+        setItems(previous => previous.map(item => item.id === selected.id ? { ...item, latitude, longitude } : item));
+      }
       map.current?.setView([latitude, longitude], 15);
       setNotice('Map position saved.');
     } catch { setNotice('The position could not be saved. Check your workspace access and try again.'); }
@@ -126,11 +165,14 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
   return <div className="lv-command-map-grid" data-command={commandView}>
     <section className="lv-card">
       <h2>Map layers</h2>
-      <label>Search cameras or investigations<input value={query} onChange={event => setQuery(event.target.value)} /></label>
+      <label>Search cameras, subjects or investigations<input value={query} onChange={event => setQuery(event.target.value)} /></label>
       <label>Show<select value={layer} onChange={event => setLayer(event.target.value)}>
-        <option value="all">All layers</option><option value="camera">Cameras</option><option value="investigation">Investigations</option>
+        <option value="all">All layers</option>
+        <option value="camera">Cameras</option>
+        <option value="subject">Enrolled subjects</option>
+        <option value="investigation">Investigations</option>
       </select></label>
-      {layer !== 'camera' && <label>Investigation status<select value={status} onChange={event => setStatus(event.target.value)}>
+      {layer === 'investigation' && <label>Investigation status<select value={status} onChange={event => setStatus(event.target.value)}>
         <option value="all">All statuses</option>{Object.entries(statuses).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
       </select></label>}
       <div className="lv-video-actions">
@@ -140,22 +182,33 @@ export default function AgencyCommandMap({ workspaceId, canManageCameras, openCa
       {loading ? <p>Loading workspace map records…</p> : loadError ? <p role="alert">Map records could not be loaded.</p>
         : !visible.length && <p>No records match these filters.</p>}
       <ul className="lv-command-map-list">
-        {visible.map(item => <li key={item.id}>
+        {visible.map(item => <li key={`${item.kind}-${item.id}`}>
           <button type="button" className="lv-secondary" aria-pressed={selectedId === item.id} onClick={() => {
             setSelectedId(item.id); setNotice('');
             if (item.latitude !== null && item.longitude !== null) map.current?.setView([item.latitude, item.longitude], 15);
-          }}>{item.title} <small>{item.latitude === null ? 'No position' : item.detail || 'Camera'}</small></button>
+          }}>
+            {item.title}{' '}
+            <small>
+              {item.kind === 'subject' ? 'Subject · ' : item.kind === 'camera' ? 'Camera · ' : ''}
+              {item.latitude === null ? 'No GPS pin' : item.detail || 'Pinned'}
+            </small>
+          </button>
         </li>)}
       </ul>
     </section>
     <section className="lv-card">
       <h2>Agency operations map</h2>
-      <div className="lv-command-map-canvas" ref={host} aria-label="Agency cameras and investigations map" />
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+        <span className="lv-badge" style={{ borderColor: colors.camera, color: colors.camera }}>● Cameras</span>
+        <span className="lv-badge" style={{ borderColor: colors.subject, color: colors.subject }}>● Enrolled subjects</span>
+        <span className="lv-badge" style={{ borderColor: colors.investigation, color: colors.investigation }}>● Investigations</span>
+      </div>
+      <div className="lv-command-map-canvas" ref={host} aria-label="Agency cameras, subjects and investigations map" />
       {tileError && <p role="status">Map tiles could not be loaded. The workspace records remain available.</p>}
       {selected && <article>
         <h3>{selected.title}</h3><p>{selected.detail}</p>
         {selected.kind === 'camera' && <button type="button" className="lv-secondary" onClick={() => openCamera(selected.id)}>Open camera feed</button>}
-        {(selected.kind === 'investigation' || canManageCameras) && <form key={selected.id} onSubmit={event => void savePosition(event)}>
+        {(selected.kind === 'investigation' || selected.kind === 'subject' || canManageCameras) && <form key={selected.id} onSubmit={event => void savePosition(event)}>
           <label>Latitude<input type="number" name="latitude" step="any" min={-90} max={90} defaultValue={selected.latitude ?? ''} required /></label>
           <label>Longitude<input type="number" name="longitude" step="any" min={-180} max={180} defaultValue={selected.longitude ?? ''} required /></label>
           <button type="submit" disabled={saving}>Save position</button>
