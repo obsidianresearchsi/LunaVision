@@ -1,0 +1,3 @@
+.lv-grid.lv-records-grid{grid-template-columns:minmax(0,1fr) minmax(320px,.8fr)}
+.lv-records-grid>.lv-card{min-width:0}
+@media(max-width:1000px){.lv-grid.lv-records-grid{grid-template-columns:minmax(0,1fr)}}

@@ -32,6 +32,11 @@ vi.mock('../components/VideoAnalysis', () => ({
   default: ({ workspaceId }: { workspaceId?: string }) => <div>Mock VideoAnalysis {workspaceId}</div>,
 }));
 
+vi.mock('../components/RecordLocation', () => ({
+  LocationPicker: () => <div>Location picker</div>,
+  RecordLocationEditor: () => null,
+}));
+
 describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
   let host: HTMLDivElement;
   let root: Root;

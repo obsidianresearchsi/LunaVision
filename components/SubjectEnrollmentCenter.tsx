@@ -350,7 +350,7 @@ export default function SubjectEnrollmentCenter({
       return;
     }
     if (!editingSubject && anglePhotos.length === 0 && !allowMetadataOnly) {
-      setError('Upload a frontal mugshot / reference photograph so the subject is registered in Face++ for facial search.');
+      setError('Upload a frontal mugshot / reference photograph so the subject is registered in FaceDB for facial search.');
       return;
     }
 
@@ -432,7 +432,7 @@ export default function SubjectEnrollmentCenter({
         setEditingSubject(null);
         setNotice(
           uploadedPhotos.length > 0
-            ? `Dossier "${fullName}" updated with ${uploadedPhotos.length} new Face++ angle(s).`
+            ? `Dossier "${fullName}" updated with ${uploadedPhotos.length} new FaceDB angle(s).`
             : `Dossier "${fullName}" updated.`,
         );
         setTab('directory');
@@ -450,10 +450,10 @@ export default function SubjectEnrollmentCenter({
         });
         setNotice(
           uploadedPhotos.length === 0
-            ? `Subject "${fullName}" metadata saved without Face++ vector.`
+            ? `Subject "${fullName}" metadata saved without FaceDB vector.`
             : allIndexed
-              ? `Subject "${fullName}" enrolled and registered on Face++ (${uploadedPhotos.length} biometric angle(s)). Ready for 1:N face search.`
-              : `Subject "${fullName}" saved with Face++ biometric token & mugshot (FaceSet indexing degraded; searchable via direct comparison fallback).`,
+              ? `Subject "${fullName}" enrolled and registered on FaceDB (${uploadedPhotos.length} biometric angle(s)). Ready for face search.`
+              : `Subject "${fullName}" saved with FaceDB biometric token & mugshot (FaceSet indexing degraded; searchable via direct comparison fallback).`,
         );
       }
       setRefreshTick((t) => t + 1);
@@ -684,7 +684,7 @@ export default function SubjectEnrollmentCenter({
 
       setMigResult({ total: workItems.length, processed, indexed, failed, errors: errRows });
       setNotice(
-        `Migration finished (${finalStatus}): ${processed}/${workItems.length} processed, ${indexed} Face++ faces indexed, ${failed} errors.`,
+        `Migration finished (${finalStatus}): ${processed}/${workItems.length} processed, ${indexed} FaceDB faces indexed, ${failed} errors.`,
       );
       setRefreshTick((t) => t + 1);
     } catch (err) {
@@ -762,7 +762,7 @@ export default function SubjectEnrollmentCenter({
       if (sub.primary_photo_path) {
         await supabase.storage.from('lv-subject-photos').remove([sub.primary_photo_path]).catch(() => {});
       }
-      setNotice(`Permanently removed subject "${sub.full_name}" from database and Face++ index.`);
+      setNotice(`Permanently removed subject "${sub.full_name}" from database and FaceDB index.`);
       setRefreshTick((t) => t + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete subject.');
@@ -790,7 +790,7 @@ export default function SubjectEnrollmentCenter({
         <div>
           <h2>Agency Subject Enrollment, Bulk Migration &amp; Biometric Dossiers</h2>
           <p>
-            Enroll authorized subject dossiers with multi-angle Face++ biometric vectors, migrate bulk CSV/Excel
+            Enroll authorized subject dossiers with multi-angle FaceDB biometric vectors, migrate bulk CSV/Excel
             criminal datasets and mugshot folders into an isolated per-agency FaceSet, and audit all face searches.
           </p>
         </div>
@@ -805,7 +805,7 @@ export default function SubjectEnrollmentCenter({
               setTab('enroll');
             }}
           >
-            + Enroll Subject
+            Enroll Subject
           </button>
           <button type="button" className={tab === 'directory' ? '' : 'lv-secondary'} onClick={() => setTab('directory')}>
             Dossier Directory ({subjects.length})
@@ -820,7 +820,7 @@ export default function SubjectEnrollmentCenter({
           )}
           {onOpenFaceSearch && (
             <button type="button" className="lv-secondary" onClick={onOpenFaceSearch}>
-              Open 1:N Face Search
+              Face search
             </button>
           )}
         </div>
@@ -878,7 +878,7 @@ export default function SubjectEnrollmentCenter({
           {loading ? (
             <p>Loading subject dossiers…</p>
           ) : filteredSubjects.length === 0 ? (
-            <p>No enrolled subject dossiers match this filter. Use "+ Enroll Subject" or "Bulk Data & Photo Migration".</p>
+            <p>No enrolled subject dossiers match this filter. Use "Enroll Subject" or "Bulk Data & Photo Migration".</p>
           ) : (
             filteredSubjects.map((sub) => (
               <article key={sub.id}>
@@ -905,7 +905,7 @@ export default function SubjectEnrollmentCenter({
                           {sub.threat_level}
                         </span>
                         <span className="lv-badge">{sub.category.replace('_', ' ')}</span>
-                        <span className="lv-badge">{sub.face_indexed ? 'Face++ Indexed' : 'No Biometric Vector'}</span>
+                        <span className="lv-badge">{sub.face_indexed ? 'FaceDB Indexed' : 'No Biometric Vector'}</span>
                         {sub.minimum_clearance > 0 && <span className="lv-badge">L{sub.minimum_clearance}</span>}
                       </div>
                       {sub.aliases && <small>Aliases: {sub.aliases}</small>}
@@ -972,7 +972,7 @@ export default function SubjectEnrollmentCenter({
                 {editingSubject ? `Edit Dossier: ${editingSubject.full_name}` : 'Enroll New Biometric Subject / Convict Dossier'}
               </h3>
               <small style={{ color: '#94a3b8' }}>
-                Registers criminal dossier + high-res facial vector directly on Face++ inside this agency's isolated FaceSet for 1:N search.
+                Registers criminal dossier + high-res facial vector directly on FaceDB inside this agency's isolated FaceSet for face search.
               </small>
             </div>
             <div className="lv-video-actions">
@@ -1009,12 +1009,12 @@ export default function SubjectEnrollmentCenter({
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <div>
-                      <strong>Enrolled on Face++ &amp; Dossier Database: {lastEnrolled.fullName}</strong>
+                      <strong>Enrolled on FaceDB &amp; Dossier Database: {lastEnrolled.fullName}</strong>
                       {lastEnrolled.subjectCode && <span className="lv-badge" style={{ marginLeft: '0.5rem' }}>{lastEnrolled.subjectCode}</span>}
                       <div style={{ fontSize: '0.84rem', marginTop: '0.25rem', color: '#cbd5e1' }}>
                         {lastEnrolled.faceToken ? (
                           <>
-                            Face++ token: <code>{lastEnrolled.faceToken}</code>
+                            FaceDB token: <code>{lastEnrolled.faceToken}</code>
                             {lastEnrolled.facesetOuterId && <> · FaceSet: <code>{lastEnrolled.facesetOuterId}</code></>}
                             {lastEnrolled.qualityScore !== null && <> · Quality: {lastEnrolled.qualityScore.toFixed(1)}%</>}
                             {' · '}
@@ -1030,7 +1030,7 @@ export default function SubjectEnrollmentCenter({
                     <div className="lv-video-actions">
                       {onOpenFaceSearch && (
                         <button type="button" onClick={onOpenFaceSearch}>
-                          Search in 1:N Face Search
+                          Face search
                         </button>
                       )}
                       <button type="button" className="lv-secondary" onClick={() => setTab('directory')}>
@@ -1045,9 +1045,9 @@ export default function SubjectEnrollmentCenter({
                 onSubmit={handleSingleEnrollment}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '1.25rem', alignItems: 'start' }}
               >
-                {/* Left Column: Biometric Mugshot Card & Face++ Pipeline */}
+                {/* Left Column: Biometric Mugshot Card & FaceDB Pipeline */}
                 <div className="lv-card" style={{ background: '#091017', border: '1px solid #243547' }}>
-                  <h4 style={{ marginTop: 0 }}>Biometric Mugshot &amp; Angles (Face++)</h4>
+                  <h4 style={{ marginTop: 0 }}>Biometric Mugshot &amp; Angles (FaceDB)</h4>
                   <div
                     onClick={() => primaryInputRef.current?.click()}
                     role="button"
@@ -1089,7 +1089,7 @@ export default function SubjectEnrollmentCenter({
                   </div>
 
                   <label>
-                    Select Reference Biometric Photo(s) (1 frontal required for Face++ search, max 5 angles)
+                    Select Reference Biometric Photo(s) (1 frontal required for FaceDB search, max 5 angles)
                     <input
                       ref={primaryInputRef}
                       name="mugshots"
@@ -1144,13 +1144,13 @@ export default function SubjectEnrollmentCenter({
                         disabled={busy}
                         onChange={(e) => setAllowMetadataOnly(e.target.checked)}
                       />
-                      <span>Save dossier metadata only without Face++ encoding (not searchable by face)</span>
+                      <span>Save dossier metadata only without FaceDB encoding (not searchable by face)</span>
                     </label>
                   )}
 
                   <div style={{ marginTop: '0.9rem', fontSize: '0.8rem', borderTop: '1px solid #1e2d3d', paddingTop: '0.65rem' }}>
                     <div style={{ color: bookingStep >= 1 ? '#76efd6' : '#64748b' }}>
-                      {bookingStep === 1 ? '⏳ ' : bookingStep > 1 ? '✓ ' : '1. '}Encode Facial Vector &amp; Index Face++ FaceSet
+                      {bookingStep === 1 ? '⏳ ' : bookingStep > 1 ? '✓ ' : '1. '}Encode Facial Vector &amp; Index FaceDB FaceSet
                     </div>
                     <div style={{ color: bookingStep >= 2 ? '#76efd6' : '#64748b', marginTop: '0.2rem' }}>
                       {bookingStep === 2 ? '⏳ ' : bookingStep > 2 ? '✓ ' : '2. '}Upload Encrypted Mugshot to Agency Vault
@@ -1234,7 +1234,7 @@ export default function SubjectEnrollmentCenter({
                   <label>
                     Dossier Status
                     <select name="status" defaultValue={editingSubject?.status || 'active'} disabled={busy}>
-                      <option value="active">Active (Searchable in Face++)</option>
+                      <option value="active">Active (Searchable in FaceDB)</option>
                       <option value="resolved">Resolved / In Custody</option>
                       <option value="archived">Archived</option>
                     </select>
@@ -1309,10 +1309,10 @@ export default function SubjectEnrollmentCenter({
                   <div className="lv-video-actions" style={{ gridColumn: '1 / -1' }}>
                     <button type="submit" disabled={busy}>
                       {busy
-                        ? 'Encoding & registering on Face++…'
+                        ? 'Encoding & registering on FaceDB…'
                         : editingSubject
                           ? 'Save dossier & new angles'
-                          : 'Enroll Convict / Subject & Register on Face++'}
+                          : 'Enroll Convict / Subject & Register on FaceDB'}
                     </button>
                     {editingSubject && (
                       <button
@@ -1349,7 +1349,7 @@ export default function SubjectEnrollmentCenter({
             <>
               <p>
                 Migrate large archives of criminal data and subject photographs directly into this agency's encrypted storage
-                and isolated Face++ FaceSet index. Automatically matches photos to spreadsheet rows by{' '}
+                and isolated FaceDB FaceSet index. Automatically matches photos to spreadsheet rows by{' '}
             <code>photo_filename</code>, <code>subject_code</code>, <code>national_id</code>, or <code>full_name</code> — or
             drop a batch/folder of named photos directly without a spreadsheet.
           </p>
@@ -1447,14 +1447,14 @@ export default function SubjectEnrollmentCenter({
               <div style={{ marginBlock: '0.5rem' }}>
                 <progress value={migProgress.done} max={migProgress.total} style={{ width: '100%' }} />
                 <small>
-                  Processing {migProgress.done} / {migProgress.total} · Indexed in Face++: {migProgress.indexed} · Errors:{' '}
+                  Processing {migProgress.done} / {migProgress.total} · Indexed in FaceDB: {migProgress.indexed} · Errors:{' '}
                   {migProgress.failed}
                 </small>
               </div>
             )}
             <div className="lv-video-actions">
               <button type="submit" disabled={busy || (!migDataRows?.length && migAllPhotoFiles.length === 0)}>
-                {busy ? 'Running Face++ indexing migration…' : 'Start migration & Face++ indexing'}
+                {busy ? 'Running FaceDB indexing migration…' : 'Start migration & FaceDB indexing'}
               </button>
               {busy && migProgress && (
                 <button
@@ -1489,7 +1489,7 @@ export default function SubjectEnrollmentCenter({
             <div className="lv-card" style={{ marginTop: '0.75rem' }}>
               <h4>Migration Result</h4>
               <p>
-                Processed: {migResult.processed} / {migResult.total} · Face++ Indexed: {migResult.indexed} · Failed:{' '}
+                Processed: {migResult.processed} / {migResult.total} · FaceDB Indexed: {migResult.indexed} · Failed:{' '}
                 {migResult.failed}
               </p>
               {migResult.errors.length > 0 && (
@@ -1522,7 +1522,7 @@ export default function SubjectEnrollmentCenter({
                       <th>File / Batch</th>
                       <th>Status</th>
                       <th>Processed / Total</th>
-                      <th>Face++ Indexed</th>
+                      <th>FaceDB Indexed</th>
                       <th>Errors</th>
                     </tr>
                   </thead>
@@ -1557,7 +1557,7 @@ export default function SubjectEnrollmentCenter({
         <div style={{ marginTop: '1rem' }}>
           <h3>Forensic Face Search Audit History ({history.length})</h3>
           <p>
-            Every 1:N database search and 1-vs-6 comparison performed in this workspace is logged with operator
+            Every face search and photo similarity comparison performed in this workspace is logged with operator
             attribution, probe quality metrics, and candidate similarity scores.
           </p>
           {history.length === 0 ? (
@@ -1581,7 +1581,7 @@ export default function SubjectEnrollmentCenter({
                   )}
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <strong>{h.search_mode === 'faceset_1n' ? '1:N Database Search' : h.search_mode}</strong>
+                      <strong>{h.search_mode === 'faceset_1n' ? 'Face search' : ['gallery_1v6', 'pair_1v1'].includes(h.search_mode) ? 'Photo similarity score' : 'Photo search'}</strong>
                       <span className="lv-badge">{h.result_count} matches</span>
                       {h.top_confidence !== null && (
                         <span className="lv-badge">Top score: {Number(h.top_confidence).toFixed(1)}%</span>

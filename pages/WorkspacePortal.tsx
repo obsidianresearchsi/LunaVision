@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase, workspaceEnabled } from '../services/supabase';
 import BusinessSignup from '../components/BusinessSignup';
+import {LocationPicker, RecordLocationEditor, type RecordPosition} from '../components/RecordLocation';
 import { signupOrganization } from '../services/businessOnboarding';
 import { WorkspaceCameras } from '../components/WorkspaceCameras';
 import VehicleWatchlist from '../components/VehicleWatchlist';
@@ -63,8 +64,8 @@ type PlatformOrg = {
   features: WorkspaceFeatureMap;
 };
 type RecordStatus = 'open' | 'in_review' | 'resolved';
-type RecordRow = { id: string; title: string; details: string; category: string; status: RecordStatus; created_at: string };
-const recordColumns = 'id,title,details,category,status,created_at';
+type RecordRow = { id: string; title: string; details: string; category: string; status: RecordStatus; created_at: string; latitude?: number | null; longitude?: number | null };
+const recordColumns = 'id,title,details,category,status,created_at,latitude,longitude';
 const statusLabel = { open: 'Open', in_review: 'In review', resolved: 'Resolved' };
 const statusActions = { open: ['in_review'], in_review: ['open', 'resolved'], resolved: ['open'] } as const;
 const portalEnabled = workspaceEnabled && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED === 'true';
@@ -177,6 +178,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const [alertSummary, setAlertSummary] = useState<{ open: number; high: number }>({ open: 0, high: 0 });
   const [alertTick, setAlertTick] = useState(0);
   const [records, setRecords] = useState<RecordRow[]>([]);
+  const [recordLocation, setRecordLocation] = useState<RecordPosition | null>(null);
+  const [locatingRecord, setLocatingRecord] = useState(false);
   const [recordScope, setRecordScope] = useState('');
   const [recordsFailed, setRecordsFailed] = useState(false);
   const [recordsAttempt, setRecordsAttempt] = useState(0);
@@ -341,6 +344,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
 
   useEffect(() => {
     setRecords([]);
+    setRecordLocation(null);
+    setLocatingRecord(false);
     setRecordScope('');
     setRecordsFailed(false);
     if (!account || !selected || !isMember) return;
@@ -1259,7 +1264,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                   <WorkspaceObservations key={account + selected} workspaceId={selected} />
                 )}
                 {!platformView && isMember && panel === 'records' && (
-                  <div className="lv-grid">
+                  <div className="lv-grid lv-records-grid">
                     <section className="lv-card">
                       <h2>{agency ? 'Investigation register' : 'Site and incident records'}</h2>
                       <div className="lv-observation-filters">
@@ -1319,6 +1324,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                             </small>
                             <h3>{record.title}</h3>
                             <p>{record.details}</p>
+                            <RecordLocationEditor workspaceId={selected} record={record} readOnly={membership?.role === 'viewer'} onUpdated={position => setRecords(previous => previous.map(item => item.id === record.id ? {...item, latitude:position?.latitude??null, longitude:position?.longitude??null} : item))}/>
                             {record.category !== 'site' && (
                               <>
                                 <form
@@ -1368,11 +1374,15 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                                 category: agency ? 'investigation' : fields.get('category'),
                                 title: String(fields.get('title')).trim(),
                                 details: fields.get('details'),
+                                minimum_clearance: Number(fields.get('minimum_clearance')),
+                                latitude: recordLocation?.latitude ?? null,
+                                longitude: recordLocation?.longitude ?? null,
                               })
                               .select(recordColumns)
                               .single();
                             if (error) throw new Error(error.message);
                             setRecords((previous) => [data as RecordRow, ...previous]);
+                            setRecordLocation(null);
                           })
                         }
                       >
@@ -1396,7 +1406,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                         <label>Minimum clearance<select name="minimum_clearance" defaultValue="0">
                           <option value="0">0 · General</option><option value="1">1 · Internal</option><option value="2">2 · Restricted</option><option value="3">3 · Confidential</option>
                         </select></label>
-                        <button disabled={busy || recordScope !== account + selected || membership?.role === 'viewer'}>Save record</button>
+                        <LocationPicker value={recordLocation} onChange={setRecordLocation} onLocatingChange={setLocatingRecord} disabled={busy || membership?.role === 'viewer'}/>
+                        <button disabled={busy || locatingRecord || recordScope !== account + selected || membership?.role === 'viewer'}>Save record</button>
                       </form>
                     </section>
                   </div>

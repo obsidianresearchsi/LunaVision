@@ -192,7 +192,7 @@ export default function FaceComparison({
     const controller = new AbortController();
     operation.current = controller;
     setBusy(true);
-    setProgress('Preparing probe photo and querying Face++ 1:N index…');
+    setProgress('Searching agency records…');
     setNotice('');
     setDbMatches([]);
     setDbTelemetry(null);
@@ -253,7 +253,7 @@ export default function FaceComparison({
 
       const out = await response.json().catch(() => null);
       if (!response.ok || !out) {
-        throw new Error(out?.error || 'Face++ database search is unavailable.');
+        throw new Error(out?.error || 'FaceDB search is unavailable.');
       }
 
       setDbMatches(Array.isArray(out.matches) ? out.matches : []);
@@ -322,7 +322,7 @@ export default function FaceComparison({
         setProgress(
           gallery
             ? `Comparing gallery photo ${i + 1} of ${candidateFiles.length} (${rawCandidate.name})…`
-            : 'Comparing photos via Face++…',
+            : 'Calculating photo similarity…',
         );
 
         const { data, error: sessionErr } = await supabase.auth.getSession();
@@ -458,7 +458,7 @@ export default function FaceComparison({
       ) : gallery && searchTab === 'database_1n' ? (
         <>
           <p>
-            Search a probe photograph against this agency's entire isolated Face++ FaceSet of enrolled subjects and
+            Search a probe photograph against this agency's entire isolated FaceDB photo records of enrolled subjects and
             migrated criminal dossiers. Every query is audit-logged with probe quality telemetry.
           </p>
           <div
@@ -617,12 +617,12 @@ export default function FaceComparison({
               {dbMatches.length === 0 ? (
                 <div className="lv-card" style={{ background: '#0c131b' }}>
                   <p>
-                    No enrolled subjects in this workspace's FaceSet matched above Face++ return candidates. Ensure
-                    convicts/subjects are enrolled and indexed on Face++ under <strong>Enroll subject</strong>.
+                    No enrolled subjects in this workspace's FaceSet matched above FaceDB results. Ensure
+                    convicts/subjects are enrolled and indexed in FaceDB under <strong>Enroll subject</strong>.
                   </p>
                   {onOpenEnrollment && (
                     <button type="button" onClick={onOpenEnrollment}>
-                      + Enroll Subject into Face++ Index
+                      Enroll subject
                     </button>
                   )}
                 </div>
@@ -669,7 +669,7 @@ export default function FaceComparison({
               ? 'Search up to six authorized gallery photos with a reference photo.'
               : 'Compare two authorized photos.'}{' '}
             Use clear front-facing JPEG, PNG, or WebP images. Large photos are automatically compressed before being
-            sent to Face++ for stateless similarity scoring.
+            sent through FaceDB to the external provider Face++ for similarity scoring.
           </p>
           <div
             style={{
