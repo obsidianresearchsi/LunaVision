@@ -562,5 +562,52 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     });
     expect(document.body.textContent).toContain('Watchlist Match: LAG123AA (Stolen vehicle)');
   });
+
+  it('paginates long incident lists and collapses/expands multi-step status history transitions', async () => {
+    const manyRecords = Array.from({ length: 8 }, (_, idx) => ({
+      id: `inv-p-${idx + 1}`,
+      title: `Incident Dossier ${idx + 1}`,
+      details: `Details for record ${idx + 1}`,
+      category: 'investigation',
+      status: idx % 2 === 0 ? 'open' : 'in_review',
+      created_at: new Date(Date.UTC(2026, 10, 12, 9, idx)).toISOString(),
+    }));
+    const manyTransitions = [
+      { id: 4, previous_status: 'in_review', next_status: 'resolved', created_at: '2026-11-12T12:00:00Z' },
+      { id: 3, previous_status: 'open', next_status: 'in_review', created_at: '2026-11-12T11:00:00Z' },
+      { id: 2, previous_status: 'in_review', next_status: 'open', created_at: '2026-11-12T10:00:00Z' },
+      { id: 1, previous_status: 'open', next_status: 'in_review', created_at: '2026-11-12T09:00:00Z' },
+    ];
+    setupMockDb({
+      workspaces: [{ id: 'ag-1', name: 'Lagos State Command', kind: 'agency', active: true, entitlement: 'Tier 1', organization_details: '' }],
+      memberships: [{ workspace_id: 'ag-1', role: 'admin' }],
+      records: manyRecords,
+      recordActivity: manyTransitions,
+    });
+
+    await renderAndFlush(<WorkspacePortalComp agency={true} platformView={false} />);
+    const invBtn = host.querySelector('button[aria-label="Incidents"]') as HTMLButtonElement;
+    await act(async () => { invBtn.click(); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+
+    // Page 1 shows 6 of 8 dossiers and compact preview of latest transitions with expand toggle
+    expect(host.textContent).toContain('Page 1 of 2 · Showing 1–6 of 8 records');
+    expect(host.textContent).toContain('Incident Dossier 1');
+    expect(host.textContent).not.toContain('Incident Dossier 7');
+    expect(host.textContent).toContain('Show all 4 transitions');
+
+    const expandBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.textContent === 'Show all 4 transitions',
+    )!;
+    await act(async () => { expandBtn.click(); });
+    expect(host.textContent).toContain('Show latest only');
+
+    // Navigate to page 2 of records
+    const nextPageBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Next')!;
+    await act(async () => { nextPageBtn.click(); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain('Page 2 of 2 · Showing 7–8 of 8 records');
+    expect(host.textContent).toContain('Incident Dossier 7');
+  });
 });
 

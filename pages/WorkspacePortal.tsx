@@ -96,12 +96,15 @@ const panelIcons = {
 };
 
 const statusOrder: RecordStatus[] = ['open', 'in_review', 'resolved'];
+const HISTORY_PREVIEW_COUNT = 2;
+const RECORDS_PAGE_SIZE = 6;
 
 function RecordActivity({ recordId, status }: { recordId: string; status: RecordStatus }) {
   const [items, setItems] = useState<{ id: number; previous_status: RecordStatus; next_status: RecordStatus; created_at: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -126,6 +129,7 @@ function RecordActivity({ recordId, status }: { recordId: string; status: Record
   }, [recordId, status, attempt]);
 
   const currentIdx = Math.max(0, statusOrder.indexOf(status));
+  const visibleItems = expanded ? items : items.slice(0, HISTORY_PREVIEW_COUNT);
 
   return (
     <div
@@ -190,29 +194,50 @@ function RecordActivity({ recordId, status }: { recordId: string; status: Record
           No status transitions recorded yet · Currently in <strong>{statusLabel[status]}</strong> stage.
         </p>
       ) : (
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.35rem' }}>
-          {items.map((item) => (
-            <li
-              key={item.id}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-                padding: '0.35rem 0.55rem',
-                borderRadius: '6px',
-                background: '#0d1722',
-                borderLeft: `3px solid ${item.next_status === 'resolved' ? '#2dd4bf' : item.next_status === 'in_review' ? '#f59e0b' : '#60a5fa'}`,
-              }}
+        <>
+          <ul
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'grid',
+              gap: '0.35rem',
+              ...(expanded ? { maxHeight: '190px', overflowY: 'auto' } : {}),
+            }}
+          >
+            {visibleItems.map((item) => (
+              <li
+                key={item.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  padding: '0.35rem 0.55rem',
+                  borderRadius: '6px',
+                  background: '#0d1722',
+                  borderLeft: `3px solid ${item.next_status === 'resolved' ? '#2dd4bf' : item.next_status === 'in_review' ? '#f59e0b' : '#60a5fa'}`,
+                }}
+              >
+                <small style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                  {statusLabel[item.previous_status] ?? item.previous_status} → {statusLabel[item.next_status] ?? item.next_status}
+                </small>
+                <small style={{ color: '#94a3b8' }}>{new Date(item.created_at).toLocaleString()}</small>
+              </li>
+            ))}
+          </ul>
+          {items.length > HISTORY_PREVIEW_COUNT && (
+            <button
+              type="button"
+              className="lv-secondary"
+              style={{ marginTop: '0.45rem', padding: '2px 9px', fontSize: '0.76rem' }}
+              onClick={() => setExpanded((prev) => !prev)}
             >
-              <small style={{ color: '#e2e8f0', fontWeight: 600 }}>
-                {statusLabel[item.previous_status] ?? item.previous_status} → {statusLabel[item.next_status] ?? item.next_status}
-              </small>
-              <small style={{ color: '#94a3b8' }}>{new Date(item.created_at).toLocaleString()}</small>
-            </li>
-          ))}
-        </ul>
+              {expanded ? 'Show latest only' : `Show all ${items.length} transitions`}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -253,6 +278,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
   const [recordQuery, setRecordQuery] = useState('');
   const [recordStatusFilter, setRecordStatusFilter] = useState<'all' | RecordStatus>('all');
   const [recordCategoryFilter, setRecordCategoryFilter] = useState<'all' | 'site' | 'incident'>('all');
+  const [recordPage, setRecordPage] = useState(0);
   const [agencyQuery, setAgencyQuery] = useState('');
   const [agencyStatusFilter, setAgencyStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
   const [notice, setNotice] = useState('');
@@ -288,6 +314,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     });
     return () => data.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    setRecordPage(0);
+  }, [recordQuery, recordStatusFilter, recordCategoryFilter, selected]);
 
   async function loadWorkspaces() {
     const requestingAccount = accountRef.current;
@@ -704,6 +734,9 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         : record.status === recordStatusFilter) &&
       (record.title + ' ' + record.details).toLowerCase().includes(recordQuery.trim().toLowerCase()),
   );
+  const totalRecordPages = Math.max(1, Math.ceil(filteredRecords.length / RECORDS_PAGE_SIZE));
+  const safeRecordPage = Math.min(recordPage, totalRecordPages - 1);
+  const pagedRecords = filteredRecords.slice(safeRecordPage * RECORDS_PAGE_SIZE, (safeRecordPage + 1) * RECORDS_PAGE_SIZE);
 
   function navigate(id: string) {
     if (!canOpenPanel(id)) { setNotice('Your account does not have access to this module.'); return; }
@@ -1196,6 +1229,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                         navigate('cameras');
                         setRequestedCamera(id);
                       }}
+                      onOpenSubject={features.biometric_enrollment ? () => navigate('enrollment') : undefined}
                     />
                   </>
                 )}
@@ -1221,6 +1255,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                       navigate('cameras');
                       setRequestedCamera(id);
                     }}
+                    onOpenSubject={features.biometric_enrollment ? () => navigate('enrollment') : undefined}
                   />
                 )}
                 {!platformView && isMember && (panel === 'cameras' || (!agency && panel === 'fleet')) && (
@@ -1412,7 +1447,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                         !filteredRecords.length && <p>No records match these filters.</p>
                       )}
                       {recordScope === account + selected &&
-                        filteredRecords.map((record) => {
+                        pagedRecords.map((record) => {
                           const statusColor =
                             record.status === 'resolved'
                               ? '#2dd4bf'
@@ -1551,6 +1586,30 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                             </article>
                           );
                         })}
+                      {recordScope === account + selected && filteredRecords.length > RECORDS_PAGE_SIZE && (
+                        <div className="lv-video-actions" style={{ marginTop: '1rem', justifyContent: 'space-between' }}>
+                          <button
+                            type="button"
+                            className="lv-secondary"
+                            disabled={safeRecordPage === 0}
+                            onClick={() => setRecordPage((p) => Math.max(0, p - 1))}
+                          >
+                            Previous
+                          </button>
+                          <small style={{ color: '#94a3b8' }}>
+                            Page {safeRecordPage + 1} of {totalRecordPages} · Showing {safeRecordPage * RECORDS_PAGE_SIZE + 1}–
+                            {Math.min((safeRecordPage + 1) * RECORDS_PAGE_SIZE, filteredRecords.length)} of {filteredRecords.length} records
+                          </small>
+                          <button
+                            type="button"
+                            className="lv-secondary"
+                            disabled={safeRecordPage + 1 >= totalRecordPages}
+                            onClick={() => setRecordPage((p) => p + 1)}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      )}
                     </section>
                     <section className="lv-card">
                       <h2>{agency ? 'Record an investigation' : 'Add a site or incident'}</h2>
