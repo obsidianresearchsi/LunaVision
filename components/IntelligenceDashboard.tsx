@@ -6,6 +6,9 @@ import {
   defaultFeatureMap,
   normalizePlate,
 } from '../services/videoIntelligence';
+import { subscribeAlertsChanged } from '../services/liveAlertBus';
+import VideoAnalysis from './VideoAnalysis';
+import VehicleImageRecognition from './VehicleImageRecognition';
 
 interface CameraRow {
   id: string;
@@ -139,7 +142,10 @@ export default function IntelligenceDashboard({
   const [timeseries, setTimeseries] = useState<TimeseriesRow[]>([]);
   const [events, setEvents] = useState<IntelEventRow[]>([]);
   const [alerts, setAlerts] = useState<AlertSummaryRow[]>([]);
+  const [faceSearchLogs, setFaceSearchLogs] = useState<any[]>([]);
   const [incidentCount, setIncidentCount] = useState<number>(0);
+  const [showLiveScanner, setShowLiveScanner] = useState<boolean>(false);
+  const [showVehicleRecognition, setShowVehicleRecognition] = useState<boolean>(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -218,10 +224,34 @@ export default function IntelligenceDashboard({
       }
     }
     void load();
+    const unsub = subscribeAlertsChanged(() => setRefreshTick((t) => t + 1));
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [workspaceId, agency, period, selectedCamera, refreshTick]);
+
+  useEffect(() => {
+    if (!agency) {
+      setFaceSearchLogs([]);
+      return;
+    }
+    let active = true;
+    void supabase
+      .from('lv_face_search_logs')
+      .select('id,mode,top_confidence,matches_json,case_reference,created_at')
+      .eq('workspace_id', workspaceId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+      .then(({ data, error: fsErr }) => {
+        if (active && !fsErr && Array.isArray(data)) {
+          setFaceSearchLogs(data);
+        }
+      });
     return () => {
       active = false;
     };
-  }, [workspaceId, agency, period, selectedCamera, refreshTick]);
+  }, [workspaceId, agency, refreshTick]);
 
   // If initialEventId was passed (e.g. clicking Investigate from Alert or VideoAnalysis), fetch and open it
   useEffect(() => {
@@ -520,6 +550,24 @@ export default function IntelligenceDashboard({
           </p>
         </div>
         <div className="lv-video-actions">
+          {agency && (
+            <>
+              <button
+                type="button"
+                className={showLiveScanner ? '' : 'lv-secondary'}
+                onClick={() => setShowLiveScanner((prev) => !prev)}
+              >
+                {showLiveScanner ? 'Hide Live / Demo Face & Plate Scanner' : 'Run Live / Demo Face & Plate Scanner'}
+              </button>
+              <button
+                type="button"
+                className={showVehicleRecognition ? '' : 'lv-secondary'}
+                onClick={() => setShowVehicleRecognition((prev) => !prev)}
+              >
+                {showVehicleRecognition ? 'Hide Vehicle Image Recognition' : 'Vehicle Image Recognition'}
+              </button>
+            </>
+          )}
           <button type="button" className="lv-secondary" onClick={() => setRefreshTick((t) => t + 1)} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh analytics'}
           </button>
@@ -528,6 +576,27 @@ export default function IntelligenceDashboard({
           </button>
         </div>
       </div>
+
+      {agency && showLiveScanner && (
+        <div className="lv-card" style={{ marginTop: '0.85rem', borderColor: '#2dd4bf', background: '#091017' }}>
+          <VideoAnalysis
+            workspaceId={workspaceId}
+            watchlistWorkspaceId={features.anpr ? workspaceId : undefined}
+            samples
+            onInspectEvent={(id) => {
+              const found = events.find((e) => e.id === id);
+              if (found) void openEventInspector(found);
+            }}
+          />
+        </div>
+      )}
+
+      {agency && showVehicleRecognition && (
+        <VehicleImageRecognition
+          workspaceId={workspaceId}
+          onAlertsChanged={() => setRefreshTick((t) => t + 1)}
+        />
+      )}
 
       {/* Filters */}
       <div className="lv-observation-filters" style={{ marginTop: '0.75rem' }}>
@@ -612,35 +681,46 @@ export default function IntelligenceDashboard({
 
         {agency ? (
           <>
-            <button type="button" onClick={() => setCategoryFilter('line_crossing')}>
-              <span>People detected / crossed</span>
-              <strong>{stats.peopleFootfall.toLocaleString()}</strong>
-              <small>
+            <button type="button" onClick={() => setCategoryFilter('line_crossing')} style={{ borderColor: '#2dd4bf' }}>
+              <span style={{ fontWeight: 700 }}>People detected / crossed</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.peopleFootfall.toLocaleString()}</strong>
+              <small style={{ fontWeight: 600 }}>
                 In: {stats.peopleIn} · Out: {stats.peopleOut}
               </small>
             </button>
-            <button type="button" onClick={() => setCategoryFilter('census')}>
-              <span>Vehicle detections</span>
-              <strong>{stats.vehicleTraffic.toLocaleString()}</strong>
-              <small>
+            <button type="button" onClick={() => setCategoryFilter('census')} style={{ borderColor: '#38bdf8' }}>
+              <span style={{ fontWeight: 700 }}>Cars &amp; vehicle detections</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.vehicleTraffic.toLocaleString()}</strong>
+              <small style={{ fontWeight: 600 }}>
                 {stats.vehicleByType.car || 0} car · {stats.vehicleByType.truck || 0} truck ·{' '}
-                {stats.vehicleByType.motorcycle || 0} moto
+                {stats.vehicleByType.motorcycle || 0} moto · {stats.vehicleByType.bus || 0} bus
               </small>
             </button>
-            <button type="button" onClick={() => setCategoryFilter('plate_read')}>
-              <span>ANPR plate reads</span>
-              <strong>{stats.plateReads.toLocaleString()}</strong>
-              <small>{stats.watchlistMatches} watchlist matches</small>
+            <button type="button" onClick={() => setCategoryFilter('plate_read')} style={{ borderColor: '#f59e0b' }}>
+              <span style={{ fontWeight: 700 }}>ANPR plate reads</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{stats.plateReads.toLocaleString()}</strong>
+              <small style={{ fontWeight: 700, color: stats.watchlistMatches > 0 ? '#ff8b89' : undefined }}>
+                {stats.watchlistMatches} watchlist matches
+              </small>
             </button>
-            <button type="button" onClick={() => onNavigate?.('alerts')}>
-              <span>Active alerts (open)</span>
-              <strong>{stats.openAlertsCount}</strong>
-              <small>{stats.openWatchlistAlertsCount} active watchlist alerts</small>
+            <button type="button" onClick={() => onNavigate?.('gallery')} style={{ borderColor: '#a855f7' }}>
+              <span style={{ fontWeight: 700 }}>Biometric face matches</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>
+                {faceSearchLogs.filter((l) => Array.isArray(l.matches_json) && l.matches_json.length > 0).length}
+              </strong>
+              <small style={{ fontWeight: 600 }}>{faceSearchLogs.length} total face scans logged</small>
+            </button>
+            <button type="button" onClick={() => onNavigate?.('alerts')} style={{ borderColor: stats.openAlertsCount > 0 ? '#ef4444' : undefined }}>
+              <span style={{ fontWeight: 700 }}>Active alerts (open)</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800, color: stats.openAlertsCount > 0 ? '#ff8b89' : undefined }}>
+                {stats.openAlertsCount}
+              </strong>
+              <small style={{ fontWeight: 600 }}>{stats.openWatchlistAlertsCount} active watchlist alerts</small>
             </button>
             <button type="button" onClick={() => onNavigate?.('records')}>
-              <span>Open investigations</span>
-              <strong>{incidentCount}</strong>
-              <small>Active agency case files</small>
+              <span style={{ fontWeight: 700 }}>Open investigations</span>
+              <strong style={{ fontSize: '1.75rem', fontWeight: 800 }}>{incidentCount}</strong>
+              <small style={{ fontWeight: 600 }}>Active agency case files</small>
             </button>
           </>
         ) : (
@@ -677,6 +757,85 @@ export default function IntelligenceDashboard({
           </>
         )}
       </div>
+
+      {/* Biometric Face Recognition & ANPR Plate Intelligence Highlights (Agency) */}
+      {agency && (
+        <div className="lv-grid" style={{ marginTop: '1rem' }}>
+          <div className="lv-card" style={{ marginBlock: 0, borderColor: '#243547' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+              <h3 style={{ margin: 0 }}>Face Detection &amp; Biometric Matches</h3>
+              <button type="button" className="lv-secondary" onClick={() => onNavigate?.('gallery')}>
+                Open Face Search
+              </button>
+            </div>
+            {faceSearchLogs.filter((l) => Array.isArray(l.matches_json) && l.matches_json.length > 0).length === 0 ? (
+              <p style={{ marginTop: '0.5rem' }}>
+                No face matches logged yet. Run Live Cameras, Demo Footage Scanner, or Face Search to correlate subjects.
+              </p>
+            ) : (
+              faceSearchLogs
+                .filter((l) => Array.isArray(l.matches_json) && l.matches_json.length > 0)
+                .slice(0, 5)
+                .map((log) => {
+                  const top = log.matches_json[0];
+                  return (
+                    <article key={log.id} style={{ paddingBlock: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: '0.98rem' }}>
+                          {top?.full_name || 'Matched subject'}{' '}
+                          {top?.subject_code && <span className="lv-badge">{top.subject_code}</span>}
+                        </strong>
+                        <span className={`lunar-badge ${top?.band === 'high' ? 'high' : 'medium'}`} style={{ fontWeight: 800 }}>
+                          {Number(top?.confidence ?? log.top_confidence ?? 0).toFixed(1)}% · {(top?.band || 'MATCH').toUpperCase()}
+                        </span>
+                      </div>
+                      <small>{new Date(log.created_at).toLocaleString()}</small>
+                    </article>
+                  );
+                })
+            )}
+          </div>
+
+          <div className="lv-card" style={{ marginBlock: 0, borderColor: '#243547' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+              <h3 style={{ margin: 0 }}>Recognized Plates (LPR / ANPR) &amp; Fleet Tally</h3>
+              <button type="button" className="lv-secondary" onClick={() => onNavigate?.('vehicles')}>
+                Vehicle Watchlist
+              </button>
+            </div>
+            <p style={{ marginTop: '0.5rem', fontWeight: 700 }}>
+              Cars: {stats.vehicleByType.car || 0} · Trucks: {stats.vehicleByType.truck || 0} · Buses:{' '}
+              {stats.vehicleByType.bus || 0} · Motorcycles: {stats.vehicleByType.motorcycle || 0}
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+              {events
+                .filter((e) => e.plate)
+                .slice(0, 10)
+                .map((e) => (
+                  <button
+                    key={e.id}
+                    type="button"
+                    className="lv-badge"
+                    onClick={() => void openEventInspector(e)}
+                    style={{
+                      cursor: 'pointer',
+                      fontWeight: 800,
+                      fontFamily: 'monospace',
+                      fontSize: '0.92rem',
+                      borderColor: e.category === 'watchlist_match' ? '#ef4444' : '#76efd6',
+                      color: e.category === 'watchlist_match' ? '#ff8b89' : '#f8fafc',
+                    }}
+                  >
+                    {e.plate} {e.category === 'watchlist_match' ? '· MATCH' : ''}
+                  </button>
+                ))}
+              {events.filter((e) => e.plate).length === 0 && (
+                <small className="lv-muted">No plates logged in this reporting period yet.</small>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Historical Activity Chart + Peak Visiting Hours */}
       <div className="lv-grid" style={{ marginTop: '1.25rem' }}>

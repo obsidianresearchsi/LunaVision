@@ -10,6 +10,7 @@ import {
   PendingIntelEvent,
   PlateConsensusBuffer,
   VEHICLE_CLASSES,
+  WEAPON_CLASSES,
   VideoIntelligenceTracker,
   analyzeFrameTamper,
   defaultCameraIntelSettings,
@@ -18,6 +19,8 @@ import {
   normalizePlate,
   preprocessPlateCanvas,
 } from '../services/videoIntelligence';
+import { dispatchOperationalAlert } from '../services/liveAlertBus';
+import { AgencyRuleRecord, evaluateRulesAgainstDetections } from '../services/rulesEngine';
 import ocrWorkerUrl from 'tesseract.js/dist/worker.min.js?url';
 import ocrCoreUrl from 'tesseract.js-core/tesseract-core-lstm.wasm.js?url';
 
@@ -79,6 +82,19 @@ interface WatchlistMatchAlert {
   snapshotDataUrl?: string;
 }
 
+interface FaceMatchBanner {
+  subject_id: string;
+  subject_code: string | null;
+  full_name: string;
+  category: string;
+  threat_level: string;
+  confidence: number;
+  band: string;
+  photo_url: string | null;
+  occurred_at: string;
+  snapshotDataUrl?: string;
+}
+
 async function uploadEventSnapshot(workspaceId: string, canvas: HTMLCanvasElement): Promise<string | undefined> {
   try {
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.78));
@@ -129,13 +145,19 @@ function VideoViewer({
   const [savingObservation, setSavingObservation] = useState(false);
   const [autoSave, setAutoSave] = useState(true);
   const [autoAnpr, setAutoAnpr] = useState(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
+  const [autoFaceScan, setAutoFaceScan] = useState(Boolean(watchlistWorkspaceId));
   const saveLock = useRef(false);
   const saveAction = useRef<() => void>(() => {});
   const lastAutoSave = useRef(0);
   const lastAutoAnprMs = useRef(0);
+  const lastFaceScanMs = useRef(0);
+  const faceScanInFlight = useRef(false);
+  const agencyRulesRef = useRef<AgencyRuleRecord[]>([]);
   const plateConsensusRef = useRef<PlateConsensusBuffer>(new PlateConsensusBuffer(5000));
   const lastRecordedPlateRef = useRef<{ plate: string; ms: number }>({ plate: '', ms: 0 });
   const [recentPlates, setRecentPlates] = useState<{ plate: string; confidence: number; ts: string; matched?: boolean }[]>([]);
+  const [faceMatches, setFaceMatches] = useState<FaceMatchBanner[]>([]);
+  const [faceScanStatus, setFaceScanStatus] = useState('');
   const lastSavedFrame = useRef<number | undefined>(undefined);
   const pendingSave = useRef<
     | {
@@ -169,10 +191,119 @@ function VideoViewer({
 
   useEffect(() => {
     setAutoAnpr(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
+    setAutoFaceScan(Boolean(watchlistWorkspaceId));
   }, [watchlistWorkspaceId, intelSettings.capabilities.anpr?.enabled]);
 
+  useEffect(() => {
+    if (!observation?.workspaceId) {
+      agencyRulesRef.current = [];
+      return;
+    }
+    let active = true;
+    void supabase
+      .from('lv_agency_rules')
+      .select('id,name,object_label,minimum_confidence,severity,enabled,cooldown_seconds')
+      .eq('workspace_id', observation.workspaceId)
+      .eq('enabled', true)
+      .then(({ data }) => {
+        if (active && Array.isArray(data)) {
+          agencyRulesRef.current = data as AgencyRuleRecord[];
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [observation?.workspaceId]);
+
+  async function scanCanvasForFaces(sourceCanvas: HTMLCanvasElement, manual = false) {
+    if (!observation?.workspaceId || faceScanInFlight.current) return;
+    if (!import.meta.env.VITE_FACE_COMPARISON_ENABLED || import.meta.env.VITE_FACE_COMPARISON_ENABLED !== 'true') {
+      if (manual) setFaceScanStatus('Face recognition provider is disabled in environment config.');
+      return;
+    }
+    faceScanInFlight.current = true;
+    if (manual) setFaceScanStatus('Scanning frame against enrolled Face++ agency subjects…');
+    try {
+      const { data: sessData } = await supabase.auth.getSession();
+      const token = sessData.session?.access_token;
+      if (!token) return;
+
+      const blob = await new Promise<Blob | null>((resolve) => sourceCanvas.toBlob(resolve, 'image/jpeg', 0.85));
+      if (!blob) return;
+
+      const snapUrl = sourceCanvas.toDataURL('image/jpeg', 0.75);
+      const form = new FormData();
+      form.set('action', 'search_database');
+      form.set('photo', new File([blob], 'frame-face-probe.jpg', { type: 'image/jpeg' }));
+      form.set(
+        'notes',
+        `Auto video scan · ${observation.cameraName || (isSampleClip ? 'Demo footage' : 'Uploaded video')}`,
+      );
+
+      const res = await fetch('/api/face-intelligence', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Workspace-Id': observation.workspaceId,
+        },
+        body: form,
+      });
+      const out = await res.json().catch(() => null);
+      if (!mounted.current) return;
+
+      if (!res.ok) {
+        if (manual) setFaceScanStatus(out?.error || 'No recognizable face detected in current frame.');
+        return;
+      }
+
+      const found = Array.isArray(out?.matches)
+        ? out.matches.filter((m: any) => Number(m.confidence ?? 0) >= 60)
+        : [];
+      if (found.length > 0) {
+        const nowIso = new Date().toISOString();
+        setFaceMatches((prev) => {
+          const next = [...prev];
+          for (const m of found) {
+            const entry: FaceMatchBanner = { ...m, occurred_at: nowIso, snapshotDataUrl: snapUrl };
+            const idx = next.findIndex((x) => x.subject_id === m.subject_id);
+            if (idx >= 0) next[idx] = entry;
+            else next.unshift(entry);
+          }
+          return next.slice(0, 6);
+        });
+        setFaceScanStatus(
+          `FACE MATCH: ${found[0].full_name} (${Number(found[0].confidence).toFixed(1)}% · ${found[0].band.toUpperCase()})`,
+        );
+
+        for (const m of found.slice(0, 2)) {
+          await dispatchOperationalAlert({
+            workspaceId: observation.workspaceId,
+            kind: 'face_match',
+            title: `Face Match: ${m.full_name} (${Number(m.confidence).toFixed(1)}%)`,
+            details: `${m.category?.toUpperCase() || 'SUBJECT'} · Threat ${m.threat_level || 'medium'} detected on ${observation.cameraName || 'video feed'}.`,
+            severity: m.band === 'high' || m.threat_level === 'high' ? 'high' : 'medium',
+            cameraId: observation.cameraId ?? null,
+            cameraName: observation.cameraName || (isSampleClip ? 'Demo footage' : 'Video upload'),
+            faceName: m.full_name,
+            subjectCode: m.subject_code,
+            confidence: Number(m.confidence),
+            recommendedAction: 'Confirm identity against enrolled mugshot and notify field responders.',
+            snapshotUrl: m.photo_url || snapUrl,
+            dedupeKey: `face:${observation.workspaceId}:${m.subject_id}`,
+          });
+        }
+      } else if (manual) {
+        setFaceScanStatus('Face detected in frame — no match against enrolled agency subjects.');
+      }
+    } catch {
+      if (manual && mounted.current) setFaceScanStatus('Face scan could not complete for this frame.');
+    } finally {
+      faceScanInFlight.current = false;
+    }
+  }
+
   async function flushIntelEvents(batch: PendingIntelEvent[], frameCanvas?: HTMLCanvasElement) {
-    if (!observation || isSampleClip || batch.length === 0) return;
+    if (!observation || batch.length === 0) return;
     try {
       let sharedSnapshotPath: string | undefined;
       const needsSnap = batch.some((e) => e.needsSnapshot);
@@ -181,6 +312,7 @@ function VideoViewer({
       }
       const formatted = batch.map(({ needsSnapshot, ...rest }) => ({
         ...rest,
+        payload: isSampleClip ? { ...rest.payload, demo_footage: true } : rest.payload,
         ...(needsSnapshot && sharedSnapshotPath ? { snapshot_path: sharedSnapshotPath } : {}),
       }));
       const { data, error } = await supabase.rpc('lv_record_intel_events', {
@@ -190,9 +322,9 @@ function VideoViewer({
       if (!error && data && mounted.current) {
         const saved = Number((data as any).saved || 0);
         if (saved > 0) setEventsIngestedCount((prev) => prev + saved);
+        const snapUrl = frameCanvas ? frameCanvas.toDataURL('image/jpeg', 0.75) : undefined;
         const matches = Array.isArray((data as any).matches) ? (data as any).matches : [];
         if (matches.length > 0) {
-          const snapUrl = frameCanvas ? frameCanvas.toDataURL('image/jpeg', 0.75) : undefined;
           setWatchlistMatches((prev) => [
             ...matches.map((m: any) => ({
               ...m,
@@ -201,6 +333,23 @@ function VideoViewer({
             })),
             ...prev.slice(0, 9),
           ]);
+          for (const m of matches) {
+            await dispatchOperationalAlert({
+              workspaceId: observation.workspaceId,
+              kind: 'watchlist_match',
+              title: `Watchlist Match: ${m.plate} (${m.label})`,
+              details: `Plate ${m.plate} (${m.label}, Case ${m.reference || 'N/A'}) spotted on ${observation.cameraName || 'video feed'}.`,
+              severity: m.category === 'stolen' || m.category === 'wanted' ? 'high' : 'medium',
+              cameraId: observation.cameraId ?? null,
+              cameraName: observation.cameraName || (isSampleClip ? 'Demo footage' : 'Uploaded footage'),
+              plate: m.plate,
+              recommendedAction: 'Verify plate in snapshot and notify nearest patrol unit.',
+              snapshotUrl: snapUrl,
+              eventId: m.event_id,
+              dedupeKey: `wl:${observation.workspaceId}:${m.plate}`,
+              persistAlert: false, // lv_record_intel_events already inserts lv_agency_alerts cleanly
+            });
+          }
         }
       }
     } catch {
@@ -224,7 +373,7 @@ function VideoViewer({
       return;
     }
     lastRecordedPlateRef.current = { plate: normalized, ms: now };
-    if (!observation || isSampleClip || !watchlistWorkspaceId) return;
+    if (!observation || !watchlistWorkspaceId) return;
 
     await flushIntelEvents(
       [
@@ -239,7 +388,7 @@ function VideoViewer({
           occurred_at: new Date(now).toISOString(),
           needsSnapshot: true,
           payload: {
-            camera_name: observation.cameraName || 'Camera stream',
+            camera_name: observation.cameraName || (isSampleClip ? 'Demo footage' : 'Camera stream'),
             camera_location: observation.cameraLocation || '',
             summary: `Recognized plate ${normalized} (${Math.round(confidencePct)}% confidence)`,
           },
@@ -315,22 +464,69 @@ function VideoViewer({
           setStatus(
             summary.tampered
               ? `Warning: ${summary.tamperReason}`
-              : objects.length
-                ? ''
-                : 'No objects detected in this frame.',
+              : summary.weaponsCurrent > 0
+                ? `WEAPON ALERT: ${summary.detectedWeapons.map((w) => w.class).join(', ')}`
+                : objects.length
+                  ? ''
+                  : 'No objects detected in this frame.',
           );
 
-          if (events.length > 0 && observation && !isSampleClip) {
+          if (events.length > 0 && observation) {
             void flushIntelEvents(events, frame);
           }
 
-          // Background Automatic ANPR on detected vehicles when enabled
           const nowMs = Date.now();
+          const hasThreatOrRuleHit = summary.weaponsCurrent > 0 || agencyRulesRef.current.length > 0;
+          const snapUrlForAlert = hasThreatOrRuleHit ? frame.toDataURL('image/jpeg', 0.72) : undefined;
+
+          if (summary.weaponsCurrent > 0 && observation?.workspaceId) {
+            for (const w of summary.detectedWeapons) {
+              void dispatchOperationalAlert({
+                workspaceId: observation.workspaceId,
+                kind: 'weapon',
+                title: `Weapon Detected: ${w.class.toUpperCase()} (${Math.round(w.score * 100)}%)`,
+                details: `Default object threat rule detected "${w.class}" on ${observation.cameraName || 'video feed'}.`,
+                severity: 'high',
+                cameraId: observation.cameraId ?? null,
+                cameraName: observation.cameraName || (isSampleClip ? 'Demo footage' : 'Uploaded video'),
+                confidence: Math.round(w.score * 100),
+                recommendedAction: 'Treat as armed threat immediately; inspect live feed and alert response team.',
+                snapshotUrl: snapUrlForAlert,
+                dedupeKey: `weapon:${observation.workspaceId}:${w.class}`,
+              });
+            }
+          }
+
+          if (observation?.workspaceId && agencyRulesRef.current.length > 0 && objects.length > 0) {
+            void evaluateRulesAgainstDetections({
+              workspaceId: observation.workspaceId,
+              rules: agencyRulesRef.current,
+              detections: objects.map((o) => ({ class: o.class, score: o.score })),
+              cameraId: observation.cameraId ?? null,
+              cameraName: observation.cameraName || (isSampleClip ? 'Demo footage' : 'Uploaded video'),
+              snapshotUrl: snapUrlForAlert,
+            });
+          }
+
+          // Background Automatic Face Recognition when a person is visible
+          if (
+            autoFaceScan &&
+            observation?.workspaceId &&
+            watchlistWorkspaceId &&
+            !faceScanInFlight.current &&
+            nowMs - lastFaceScanMs.current >= 7000 &&
+            objects.some((o) => o.class.toLowerCase() === 'person' && o.score >= 0.45)
+          ) {
+            lastFaceScanMs.current = nowMs;
+            void scanCanvasForFaces(frame, false);
+          }
+
+          // Background Automatic ANPR on detected vehicles when enabled
           if (
             autoAnpr &&
             watchlistWorkspaceId &&
             currentSettings.capabilities.anpr?.enabled &&
-            nowMs - lastAutoAnprMs.current >= 6000
+            nowMs - lastAutoAnprMs.current >= 5000
           ) {
             const vehicleObj = objects.find(
               (o) => VEHICLE_CLASSES.has(o.class.toLowerCase()) && o.bbox[2] >= 48 && o.bbox[3] >= 28,
@@ -369,7 +565,7 @@ function VideoViewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [detecting, frozen, size, autoAnpr, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
+  }, [detecting, frozen, size, autoAnpr, autoFaceScan, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
 
   async function runBackgroundPlateOcr(sourceCanvas: HTMLCanvasElement, region: Box, vehicleClass: string) {
     try {
@@ -530,7 +726,7 @@ function VideoViewer({
         const value = normalizePlate(data.text);
         setPlate(value ? { text: value, confidence: data.confidence } : null);
         setStatus(value ? '' : 'No readable plate text. Try a sharper frame and a tighter selection.');
-        if (value && !samplePlate) {
+        if (value && observation && watchlistWorkspaceId) {
           await recordRecognizedPlate(value, data.confidence, canvas, 'car');
         }
       } finally {
@@ -576,6 +772,13 @@ function VideoViewer({
               {intelSummary.vehicleByType.bus || 0} bus · {intelSummary.vehicleByType.truck || 0} truck
             </small>
           </div>
+          <div className="lv-stat-card" style={{ padding: '0.6rem 0.8rem', borderColor: intelSummary.weaponsCurrent > 0 ? '#ef4444' : undefined }}>
+            <span>Weapons / Threats</span>
+            <strong style={{ fontSize: '1.15rem', fontWeight: 800, color: intelSummary.weaponsCurrent > 0 ? '#ef4444' : '#76efd6' }}>
+              {intelSummary.weaponsCurrent > 0 ? `${intelSummary.weaponsCurrent} WEAPON` : 'Clear (Armed ON)'}
+            </strong>
+            <small>Face matches: {faceMatches.length}</small>
+          </div>
           <div className="lv-stat-card" style={{ padding: '0.6rem 0.8rem' }}>
             <span>Analytics status</span>
             <strong style={{ fontSize: '0.95rem', color: intelSummary.tampered ? '#ef4444' : undefined }}>
@@ -586,9 +789,63 @@ function VideoViewer({
                   : 'Outside schedule'}
             </strong>
             <small>
-              {isSampleClip ? 'Practice sample (not logged)' : `${eventsIngestedCount} events logged`}
+              {observation ? `${eventsIngestedCount} events logged` : 'Local preview mode'}
             </small>
           </div>
+        </div>
+      )}
+
+      {/* Real-time Face Recognition Match Alert Banner */}
+      {faceMatches.length > 0 && (
+        <div
+          role="alert"
+          className="lv-card"
+          style={{
+            marginBottom: '0.85rem',
+            border: '2px solid #f59e0b',
+            background: 'rgba(120, 53, 15, 0.28)',
+          }}
+        >
+          <div className="lv-card-top">
+            <strong style={{ fontSize: '1rem', fontWeight: 800 }}>
+              BIOMETRIC FACE RECOGNITION MATCH ({faceMatches.length})
+            </strong>
+            <span className="lunar-badge high">FACE++ MATCH</span>
+          </div>
+          {faceMatches.map((fm) => (
+            <div
+              key={fm.subject_id}
+              style={{
+                display: 'flex',
+                gap: '0.85rem',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                marginTop: '0.5rem',
+                paddingTop: '0.5rem',
+                borderTop: '1px solid rgba(251, 191, 36, 0.25)',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                {(fm.photo_url || fm.snapshotDataUrl) && (
+                  <img
+                    src={fm.photo_url || fm.snapshotDataUrl}
+                    alt={`Matched subject ${fm.full_name}`}
+                    style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #f59e0b' }}
+                  />
+                )}
+                <div>
+                  <div style={{ fontSize: '1rem' }}>
+                    <strong>{fm.full_name}</strong>{' '}
+                    {fm.subject_code && <span className="lv-badge" style={{ fontWeight: 700 }}>{fm.subject_code}</span>}
+                  </div>
+                  <small style={{ color: '#fde68a', fontWeight: 700 }}>
+                    {fm.confidence.toFixed(1)}% ({fm.band.toUpperCase()}) · {fm.category} · Threat: {fm.threat_level} · {new Date(fm.occurred_at).toLocaleTimeString()}
+                  </small>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -771,11 +1028,23 @@ function VideoViewer({
               ? intelSummary.activeTracks.map((track) => {
                   const [x, y, width, height] = track.bbox;
                   const dirTag = track.direction === 'Stationary' ? '•' : `→${track.direction}`;
+                  const weapon = WEAPON_CLASSES.has(track.objectClass);
                   return (
                     <g key={track.trackId}>
-                      <rect x={x} y={y} width={width} height={height} />
-                      <text x={x + 3} y={Math.max(12, y + 12)}>
-                        #{track.trackId} {track.objectClass} {Math.round(track.score * 100)}% {dirTag}
+                      <rect
+                        x={x}
+                        y={y}
+                        width={width}
+                        height={height}
+                        style={weapon ? { stroke: '#ef4444', strokeWidth: 3 } : undefined}
+                      />
+                      <text
+                        x={x + 3}
+                        y={Math.max(12, y + 12)}
+                        style={weapon ? { fill: '#ff8b89', fontWeight: 800 } : undefined}
+                      >
+                        {weapon ? 'WEAPON: ' : `#${track.trackId} `}
+                        {track.objectClass} {Math.round(track.score * 100)}% {dirTag}
                       </text>
                     </g>
                   );
@@ -867,6 +1136,24 @@ function VideoViewer({
               <button type="button" disabled={!ready} onClick={freezeFrame}>
                 Freeze frame for plate OCR
               </button>
+              {observation?.workspaceId && watchlistWorkspaceId && (
+                <button
+                  type="button"
+                  className="lv-secondary"
+                  disabled={!ready}
+                  onClick={() => {
+                    const media = video.current;
+                    if (!media || media.readyState < 2) return;
+                    const snapCanvas = document.createElement('canvas');
+                    snapCanvas.width = Math.max(1, size.width);
+                    snapCanvas.height = Math.max(1, size.height);
+                    snapCanvas.getContext('2d')?.drawImage(media, 0, 0, snapCanvas.width, snapCanvas.height);
+                    void scanCanvasForFaces(snapCanvas, true);
+                  }}
+                >
+                  Scan faces in frame
+                </button>
+              )}
               {watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled && (
                 <label className="lv-inline-check" style={{ marginLeft: '0.5rem' }}>
                   <input
@@ -875,6 +1162,16 @@ function VideoViewer({
                     onChange={(e) => setAutoAnpr(e.target.checked)}
                   />
                   <span>Real-time background ANPR matching</span>
+                </label>
+              )}
+              {watchlistWorkspaceId && (
+                <label className="lv-inline-check" style={{ marginLeft: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoFaceScan}
+                    onChange={(e) => setAutoFaceScan(e.target.checked)}
+                  />
+                  <span>Live face recognition</span>
                 </label>
               )}
             </>
@@ -916,25 +1213,31 @@ function VideoViewer({
         </>
       )}
       {observationNotice && <p role="status">{observationNotice}</p>}
-      {status && <p role="status">{status}</p>}
+      {faceScanStatus && <p role="status" style={{ fontWeight: 700, color: '#fcd34d' }}>{faceScanStatus}</p>}
+      {status && <p role="status" style={{ fontWeight: status.startsWith('WEAPON ALERT') ? 800 : undefined, color: status.startsWith('WEAPON ALERT') ? '#ff8b89' : undefined }}>{status}</p>}
       {plate && (
         <p role="status">
-          <strong>{plate.text}</strong> · {Math.round(plate.confidence)}% OCR confidence. Verify against the frame.
+          <strong style={{ fontSize: '1.1rem', letterSpacing: '0.06em', fontFamily: 'monospace', color: '#76efd6' }}>{plate.text}</strong> ·{' '}
+          {Math.round(plate.confidence)}% OCR confidence. Verify against the frame.
         </p>
       )}
       {recentPlates.length > 0 && !samplePlate && (
-        <div className="lv-card" style={{ marginTop: '0.5rem', padding: '0.75rem' }}>
-          <strong style={{ fontSize: '0.85rem' }}>Live ANPR Plate Feed (Temporal Consensus)</strong>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
+        <div className="lv-card" style={{ marginTop: '0.5rem', padding: '0.75rem', borderColor: '#2dd4bf' }}>
+          <strong style={{ fontSize: '0.92rem', fontWeight: 800 }}>LIVE ANPR PLATE FEED (TEMPORAL CONSENSUS)</strong>
+          <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
             {recentPlates.map((rp) => (
-              <span key={rp.plate} className="lv-badge">
+              <span
+                key={rp.plate}
+                className="lv-badge"
+                style={{ fontWeight: 800, fontSize: '0.92rem', fontFamily: 'monospace', borderColor: '#76efd6', color: '#f8fafc' }}
+              >
                 {rp.plate} · {Math.round(rp.confidence)}% · {rp.ts}
               </span>
             ))}
           </div>
         </div>
       )}
-      {plate && !samplePlate && watchlistWorkspaceId && (
+      {plate && watchlistWorkspaceId && (
         <PlateWatchlistCheck key={plate.text} workspaceId={watchlistWorkspaceId} initialPlate={plate.text} />
       )}
     </>
@@ -1089,16 +1392,23 @@ export default function VideoAnalysis({
           intelSettings={intelSettings}
           onInspectEvent={onInspectEvent}
           observation={
-            workspaceId && (source === 'file' || (source === 'camera' && cameraId))
+            workspaceId
               ? {
                   workspaceId,
                   cameraId: source === 'camera' ? cameraId : undefined,
-                  cameraName: source === 'camera' ? cameraName : 'Uploaded video file',
-                  cameraLocation: source === 'camera' ? cameraLocation : undefined,
+                  cameraName:
+                    source === 'camera'
+                      ? cameraName
+                      : source === 'traffic'
+                        ? 'Demo traffic footage'
+                        : source === 'plate'
+                          ? 'Demo plate sample'
+                          : 'Uploaded video file',
+                  cameraLocation: source === 'camera' ? cameraLocation : 'Demo / Local Playback',
                 }
               : undefined
           }
-          watchlistWorkspaceId={source === 'traffic' ? undefined : watchlistWorkspaceId}
+          watchlistWorkspaceId={watchlistWorkspaceId}
         />
       )}
     </section>

@@ -25,6 +25,7 @@ export type CapabilityKey =
   | 'intrusion'
   | 'perimeter'
   | 'abandoned_object'
+  | 'weapon_detection'
   | 'tamper'
   | 'camera_health'
   | 'anpr';
@@ -189,6 +190,14 @@ export const CAPABILITY_CATALOG: CapabilityDescriptor[] = [
     description: 'Detect bags, backpacks, or suitcases left stationary without a person nearby beyond the configured limit.',
   },
   {
+    key: 'weapon_detection',
+    label: 'Weapon & sharp-object threat detection (Default ON)',
+    group: 'advanced',
+    feature: 'advanced_detection',
+    engine: 'COCO-SSD Threat Classifier (knife, scissors, bat)',
+    description: 'Automatically detect knives, sharp objects, or blunt weapons on every frame and trigger immediate high-priority alerts.',
+  },
+  {
     key: 'tamper',
     label: 'Camera tampering & obstruction detection',
     group: 'advanced',
@@ -217,6 +226,21 @@ export const CAPABILITY_CATALOG: CapabilityDescriptor[] = [
 
 export const VEHICLE_CLASSES = new Set(['car', 'motorcycle', 'bus', 'truck', 'bicycle']);
 export const ABANDONED_ITEM_CLASSES = new Set(['backpack', 'suitcase', 'handbag', 'umbrella']);
+export const WEAPON_CLASSES = new Set([
+  'knife',
+  'scissors',
+  'baseball bat',
+  'weapon',
+  'gun',
+  'pistol',
+  'rifle',
+  'firearm',
+  'machete',
+]);
+
+export function isWeaponClass(label: string): boolean {
+  return WEAPON_CLASSES.has(label.trim().toLowerCase());
+}
 
 export function defaultFeatureMap(agency: boolean): WorkspaceFeatureMap {
   return {
@@ -301,6 +325,7 @@ export function defaultCameraIntelSettings(
       intrusion: { enabled: Boolean(f.advanced_detection), sensitivity: 'medium' },
       perimeter: { enabled: false, sensitivity: 'medium' },
       abandoned_object: { enabled: false, sensitivity: 'medium' },
+      weapon_detection: { enabled: true, sensitivity: 'medium' },
       tamper: { enabled: Boolean(f.advanced_detection), sensitivity: 'medium' },
       camera_health: { enabled: Boolean(f.advanced_detection), sensitivity: 'medium' },
       anpr: { enabled: Boolean(agency && f.anpr), sensitivity: 'medium' },
@@ -627,6 +652,8 @@ export interface FrameIntelligenceSummary {
   vehicleByType: Record<string, number>;
   zoneOccupancy: Record<string, { name: string; kind: ZoneKind; people: number; vehicles: number }>;
   activeTracks: TrackedEntity[];
+  weaponsCurrent: number;
+  detectedWeapons: { class: string; score: number }[];
   tampered: boolean;
   tamperReason: string | null;
 }
@@ -744,6 +771,11 @@ export class VideoIntelligenceTracker {
       if (ABANDONED_ITEM_CLASSES.has(cls)) {
         if (!caps.abandoned_object?.enabled) return false;
         const minConf = sensitivityMinimumConfidence(caps.abandoned_object?.sensitivity || 'medium');
+        return d.score >= minConf;
+      }
+      if (WEAPON_CLASSES.has(cls)) {
+        if (caps.weapon_detection?.enabled === false) return false;
+        const minConf = Math.min(0.45, sensitivityMinimumConfidence(caps.weapon_detection?.sensitivity || 'medium'));
         return d.score >= minConf;
       }
       return false;
@@ -902,6 +934,7 @@ export class VideoIntelligenceTracker {
     const personTracks = activeTracks.filter((t) => t.objectClass === 'person');
     const vehicleTracks = activeTracks.filter((t) => VEHICLE_CLASSES.has(t.objectClass));
     const itemTracks = activeTracks.filter((t) => ABANDONED_ITEM_CLASSES.has(t.objectClass));
+    const weaponTracks = activeTracks.filter((t) => WEAPON_CLASSES.has(t.objectClass));
 
     const vehicleByType: Record<string, number> = {
       car: 0,
@@ -1216,8 +1249,34 @@ export class VideoIntelligenceTracker {
         }
       }
 
-      // Periodic traffic/people census (every 20 seconds when detections exist)
-      if (nowMs - this.lastCensusMs >= 20000) {
+      // Weapon / sharp threat object detection (enabled by default)
+      if (caps.weapon_detection?.enabled !== false && weaponTracks.length > 0) {
+        for (const wTrack of weaponTracks) {
+          if (!wTrack.alertedKinds.has('weapon') && this.canEmitKey(`weapon:${wTrack.objectClass}`, nowMs, cooldownMs)) {
+            wTrack.alertedKinds.add('weapon');
+            events.push({
+              request_id: crypto.randomUUID(),
+              camera: cameraId,
+              source,
+              category: 'intrusion',
+              object_class: wTrack.objectClass,
+              count: 1,
+              confidence: Number(wTrack.score.toFixed(3)),
+              occurred_at: nowIso,
+              needsSnapshot: true,
+              payload: {
+                alert_type: 'weapon_detection',
+                weapon_class: wTrack.objectClass,
+                track_id: wTrack.trackId,
+                summary: `Weapon / threat detected: ${wTrack.objectClass} (${Math.round(wTrack.score * 100)}% confidence)`,
+              },
+            });
+          }
+        }
+      }
+
+      // Periodic traffic/people census (every 12 seconds when detections exist)
+      if (nowMs - this.lastCensusMs >= 12000) {
         this.lastCensusMs = nowMs;
         if ((caps.people_detection?.enabled || caps.people_counting?.enabled) && personTracks.length > 0) {
           events.push({
@@ -1299,6 +1358,8 @@ export class VideoIntelligenceTracker {
         vehicleByType,
         zoneOccupancy,
         activeTracks,
+        weaponsCurrent: weaponTracks.length,
+        detectedWeapons: weaponTracks.map((w) => ({ class: w.objectClass, score: w.score })),
         tampered,
         tamperReason,
       },

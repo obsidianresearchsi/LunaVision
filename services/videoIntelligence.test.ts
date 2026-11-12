@@ -14,6 +14,8 @@ import {
   pointInPolygon,
   roleCan,
 } from './videoIntelligence';
+import { describeRuleUseCase, evaluateRulesAgainstDetections } from './rulesEngine';
+import { subscribeLiveAlerts } from './liveAlertBus';
 
 describe('videoIntelligence service', () => {
   it('normalizes and validates vehicle plates across formatting variants', () => {
@@ -235,5 +237,51 @@ describe('videoIntelligence service', () => {
         photo_filename: 'AFIS-1042.jpg',
       }),
     );
+  });
+
+  it('enables weapon detection by default and evaluates AI detection rules with live popups', async () => {
+    const defaults = defaultCameraIntelSettings(true);
+    expect(defaults.capabilities.weapon_detection.enabled).toBe(true);
+
+    const tracker = new VideoIntelligenceTracker();
+    const res = tracker.processFrame({
+      detections: [{ class: 'knife', score: 0.78, bbox: [120, 80, 40, 20] }],
+      frameWidth: 640,
+      frameHeight: 360,
+      settings: defaults,
+      cameraId: 'cam-gate',
+      source: 'camera',
+    });
+    expect(res.summary.weaponsCurrent).toBe(1);
+    expect(res.summary.detectedWeapons[0].class).toBe('knife');
+    expect(res.events.some((e) => e.payload?.alert_type === 'weapon_detection')).toBe(true);
+
+    expect(describeRuleUseCase('backpack').useCase).toContain('counter-IED');
+
+    const popups: string[] = [];
+    const unsub = subscribeLiveAlerts((alert) => popups.push(alert.title));
+    try {
+      const fired = await evaluateRulesAgainstDetections({
+        workspaceId: 'ws-ag-1',
+        rules: [
+          {
+            id: 'rule-truck-1',
+            name: 'Heavy Truck Gate Alert',
+            object_label: 'truck',
+            minimum_confidence: 0.7,
+            severity: 'high',
+            enabled: true,
+            cooldown_seconds: 60,
+          },
+        ],
+        detections: [{ class: 'truck', score: 0.89 }],
+        cameraId: 'cam-gate',
+        cameraName: 'Main Gate',
+      });
+      expect(fired).toHaveLength(1);
+      expect(popups[0]).toContain('Heavy Truck Gate Alert');
+    } finally {
+      unsub();
+    }
   });
 });

@@ -2,6 +2,8 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { getBasemap } from '../services/mapConfig';
 import { roleCan } from '../services/videoIntelligence';
+import { dispatchOperationalAlert, notifyAlertsChanged, subscribeAlertsChanged } from '../services/liveAlertBus';
+import { AI_RULE_TEMPLATES, describeRuleUseCase } from '../services/rulesEngine';
 
 type Mode = 'alerts' | 'evidence' | 'rules' | 'fleet' | 'integrations';
 type Row = { id: string; [key: string]: any };
@@ -9,11 +11,11 @@ const tables = { alerts: 'lv_agency_alerts', evidence: 'lv_agency_evidence', rul
 const titles = {
   alerts: 'Centralized alerts & notifications',
   evidence: 'Evidence register',
-  rules: 'Object detection rules',
-  fleet: 'Device fleet',
+  rules: 'AI detection rules & use cases',
+  fleet: 'Device fleet & camera health',
   integrations: 'Connections & configuration',
 };
-const objectLabels = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'boat', 'airplane', 'train', 'fire hydrant', 'backpack', 'suitcase'];
+const objectLabels = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'backpack', 'suitcase', 'fire hydrant', 'knife', 'person', 'boat', 'airplane', 'train'];
 const pageSize = 30;
 
 const ALERT_CATEGORY_LABELS: Record<string, string> = {
@@ -53,6 +55,7 @@ export default function AgencyOperations({
 }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [camerasById, setCamerasById] = useState<Record<string, { name: string; location: string }>>({});
+  const [fleetActivity, setFleetActivity] = useState<Record<string, { last_event_at: string | null; events_24h: number }>>({});
   const [snapUrls, setSnapUrls] = useState<Record<string, string>>({});
   const [cases, setCases] = useState<Row[]>([]);
   const [caseQuery, setCaseQuery] = useState('');
@@ -129,10 +132,13 @@ export default function AgencyOperations({
         if (mode === 'alerts' && filter !== 'all') request = request.eq('status', filter);
         if (mode === 'alerts' && categoryFilter !== 'all') request = request.eq('category', categoryFilter);
 
-        const [result, camsRes] = await Promise.all([
+        const [result, camsRes, fleetActRes] = await Promise.all([
           request.order('created_at', { ascending: false }).order('id', { ascending: false }).range(page * pageSize, (page + 1) * pageSize),
           mode === 'alerts'
             ? supabase.from('lv_cameras').select('id,name,location').eq('workspace_id', workspaceId)
+            : Promise.resolve({ data: [], error: null }),
+          mode === 'fleet'
+            ? supabase.rpc('lv_intel_camera_activity', { target: workspaceId })
             : Promise.resolve({ data: [], error: null }),
         ]);
 
@@ -148,6 +154,13 @@ export default function AgencyOperations({
               camMap[c.id] = { name: c.name, location: c.location };
             }
             setCamerasById(camMap);
+          }
+          if (mode === 'fleet' && Array.isArray(fleetActRes.data)) {
+            const actMap: Record<string, { last_event_at: string | null; events_24h: number }> = {};
+            for (const a of fleetActRes.data as any[]) {
+              actMap[a.camera_id] = { last_event_at: a.last_event_at, events_24h: Number(a.events_24h || 0) };
+            }
+            setFleetActivity(actMap);
           }
         }
 
@@ -177,9 +190,11 @@ export default function AgencyOperations({
       .finally(() => {
         if (current) setLoading(false);
       });
+    const unsub = mode === 'alerts' ? subscribeAlertsChanged(() => setAttempt((v) => v + 1)) : () => {};
     return () => {
       current = false;
       controller.abort();
+      unsub();
     };
   }, [workspaceId, mode, attempt, query, filter, categoryFilter, page]);
 
@@ -309,20 +324,175 @@ export default function AgencyOperations({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  async function resolveAlertDirect(row: Row) {
+    if (row.status === 'resolved') return;
+    if (row.status === 'open') {
+      const { error } = await supabase.rpc('lv_transition_alert', {
+        target: row.id,
+        expected: 'open',
+        next_status: 'resolved',
+      });
+      if (error) {
+        if (error.message.includes('Invalid alert transition')) {
+          const ack = await supabase.rpc('lv_transition_alert', {
+            target: row.id,
+            expected: 'open',
+            next_status: 'acknowledged',
+          });
+          if (ack.error) throw new Error(ack.error.message);
+          const res = await supabase.rpc('lv_transition_alert', {
+            target: row.id,
+            expected: 'acknowledged',
+            next_status: 'resolved',
+          });
+          if (res.error) throw new Error(res.error.message);
+        } else {
+          throw new Error(error.message);
+        }
+      }
+    } else {
+      const { error } = await supabase.rpc('lv_transition_alert', {
+        target: row.id,
+        expected: row.status,
+        next_status: 'resolved',
+      });
+      if (error) throw new Error(error.message);
+    }
+    notifyAlertsChanged();
+    onAlertsChanged?.();
+  }
+
+  async function checkFleetStreamHealth(row: Row) {
+    if (!row.playback_url) {
+      throw new Error(`Device "${row.name}" has no gateway playback URL configured yet.`);
+    }
+    try {
+      const res = await fetch(row.playback_url, { method: 'HEAD', mode: 'no-cors' });
+      if (res) {
+        await supabase.rpc('lv_record_intel_events', {
+          target: workspaceId,
+          events: [
+            {
+              request_id: crypto.randomUUID(),
+              camera: row.id,
+              source: 'camera',
+              category: 'census',
+              object_class: 'person',
+              count: 0,
+              occurred_at: new Date().toISOString(),
+              payload: { camera_name: row.name, summary: 'Device fleet stream connectivity verified' },
+            },
+          ],
+        });
+      }
+    } catch {
+      await dispatchOperationalAlert({
+        workspaceId,
+        kind: 'camera_offline',
+        title: `Device Offline: ${row.name}`,
+        details: `Stream health check could not reach "${row.name}" (${row.location || 'No location'}).`,
+        severity: 'high',
+        cameraId: row.id,
+        cameraName: row.name,
+        recommendedAction: 'Inspect gateway endpoint, CORS headers, and device power/network.',
+      });
+      throw new Error(`Stream unreachable for "${row.name}". Offline alert logged.`);
+    }
+  }
+
   return (
     <section className="lv-card lv-agency-operations">
       <h2>{titles[mode]}</h2>
       <p>
         {mode === 'rules'
-          ? 'Enabled rules evaluate saved object detections. Per-camera intelligence thresholds, zones, and schedules can also be configured in Camera Configuration.'
+          ? 'Define automated security rules that run live on every camera stream, uploaded video, and demo footage—triggering instant popup alerts and persistent alert logs with cooldown protection.'
           : mode === 'evidence'
             ? 'Original files are stored privately, linked to an investigation, and verified with SHA-256 on download. Registered files cannot be overwritten or deleted from this console.'
             : mode === 'alerts'
-              ? 'Real-time camera intelligence alerts, threshold breaches, and manual operator reports. Review the snapshot and recommended action, acknowledge, then resolve.'
+              ? 'Real-time camera intelligence, face matches, weapon detections, vehicle recognition, watchlist plate hits, and AI rule alerts. Acknowledge or resolve in one click.'
               : mode === 'fleet'
-                ? 'Manage registered devices, open live feeds, and configure per-camera analytics and detection zones.'
+                ? 'Monitor fleet online telemetry, connected analytics volume, stream formats, and register or test camera endpoints.'
                 : 'Connection status is checked against this workspace. Credentials remain in server configuration.'}
       </p>
+
+      {mode === 'fleet' && !loading && !failed && (
+        <div
+          className="lv-console-metrics"
+          style={{ marginBlock: '0.85rem', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
+        >
+          <article>
+            <span>Registered devices</span>
+            <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>{rows.length}</strong>
+            <small>Total fleet inventory</small>
+          </article>
+          <article style={{ borderColor: '#2dd4bf' }}>
+            <span>Active telemetry (24h)</span>
+            <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+              {
+                rows.filter((r) => {
+                  const act = fleetActivity[r.id];
+                  return act?.last_event_at && Date.now() - new Date(act.last_event_at).getTime() < 24 * 3600_000;
+                }).length
+              }
+            </strong>
+            <small>Cameras logging analytics</small>
+          </article>
+          <article>
+            <span>Playback configured</span>
+            <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+              {rows.filter((r) => Boolean(r.playback_url)).length}
+            </strong>
+            <small>{rows.filter((r) => !r.playback_url).length} awaiting gateway URL</small>
+          </article>
+          <article>
+            <span>24h events logged</span>
+            <strong style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+              {Object.values(fleetActivity).reduce((sum, a) => sum + (a.events_24h || 0), 0)}
+            </strong>
+            <small>Cars, people, ANPR &amp; threats</small>
+          </article>
+        </div>
+      )}
+
+      {mode === 'rules' && (
+        <div className="lv-card" style={{ marginBlock: '0.85rem', borderColor: '#2dd4bf', background: '#091017' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <strong>Built-in Default Threat Rules (Always Active)</strong>
+            <span className="lunar-badge high" style={{ fontWeight: 800 }}>WEAPONS + ANPR + FACE ACTIVE</span>
+          </div>
+          <p style={{ margin: '0.35rem 0', fontSize: '0.86rem', color: '#cbd5e1' }}>
+            Weapon &amp; sharp-object detection (<code>knife</code>, <code>scissors</code>, <code>baseball bat</code>), ANPR vehicle watchlist matching, and enrolled Face++ convict/subject matching are enabled by default across live cameras &amp; demo footage. Add custom rules below for vehicles or unattended packages:
+          </p>
+          {canManage && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+              {AI_RULE_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  className="lv-secondary"
+                  disabled={busy}
+                  title={tpl.useCase}
+                  onClick={() =>
+                    void run(async () => {
+                      const { error } = await supabase.from('lv_agency_rules').insert({
+                        workspace_id: workspaceId,
+                        name: tpl.name,
+                        object_label: tpl.objectLabel,
+                        minimum_confidence: tpl.confidencePct / 100,
+                        severity: tpl.severity,
+                        cooldown_seconds: tpl.cooldownSeconds,
+                      });
+                      if (error) throw new Error(error.message);
+                    }, `Installed AI Rule: ${tpl.name}`)
+                  }
+                >
+                  + {tpl.name} ({tpl.objectLabel})
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {mode !== 'integrations' && (
         <div className="lv-observation-filters">
@@ -418,7 +588,83 @@ export default function AgencyOperations({
                 mode === 'alerts' &&
                 roleCan(role, nextStatus === 'acknowledged' ? 'alert_ack' : 'alert_resolve', platformAdmin);
 
-              return (
+              async function resolveAlertDirect(row: Row) {
+    if (row.status === 'resolved') return;
+    if (row.status === 'open') {
+      const { error } = await supabase.rpc('lv_transition_alert', {
+        target: row.id,
+        expected: 'open',
+        next_status: 'resolved',
+      });
+      if (error) {
+        if (error.message.includes('Invalid alert transition')) {
+          const ack = await supabase.rpc('lv_transition_alert', {
+            target: row.id,
+            expected: 'open',
+            next_status: 'acknowledged',
+          });
+          if (ack.error) throw new Error(ack.error.message);
+          const res = await supabase.rpc('lv_transition_alert', {
+            target: row.id,
+            expected: 'acknowledged',
+            next_status: 'resolved',
+          });
+          if (res.error) throw new Error(res.error.message);
+        } else {
+          throw new Error(error.message);
+        }
+      }
+    } else {
+      const { error } = await supabase.rpc('lv_transition_alert', {
+        target: row.id,
+        expected: row.status,
+        next_status: 'resolved',
+      });
+      if (error) throw new Error(error.message);
+    }
+    notifyAlertsChanged();
+    onAlertsChanged?.();
+  }
+
+  async function checkFleetStreamHealth(row: Row) {
+    if (!row.playback_url) {
+      throw new Error(`Device "${row.name}" has no gateway playback URL configured yet.`);
+    }
+    try {
+      const res = await fetch(row.playback_url, { method: 'HEAD', mode: 'no-cors' });
+      if (res) {
+        await supabase.rpc('lv_record_intel_events', {
+          target: workspaceId,
+          events: [
+            {
+              request_id: crypto.randomUUID(),
+              camera: row.id,
+              source: 'camera',
+              category: 'census',
+              object_class: 'person',
+              count: 0,
+              occurred_at: new Date().toISOString(),
+              payload: { camera_name: row.name, summary: 'Device fleet stream connectivity verified' },
+            },
+          ],
+        });
+      }
+    } catch {
+      await dispatchOperationalAlert({
+        workspaceId,
+        kind: 'camera_offline',
+        title: `Device Offline: ${row.name}`,
+        details: `Stream health check could not reach "${row.name}" (${row.location || 'No location'}).`,
+        severity: 'high',
+        cameraId: row.id,
+        cameraName: row.name,
+        recommendedAction: 'Inspect gateway endpoint, CORS headers, and device power/network.',
+      });
+      throw new Error(`Stream unreachable for "${row.name}". Offline alert logged.`);
+    }
+  }
+
+  return (
                 <article key={row.id}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '240px' }}>
@@ -471,11 +717,22 @@ export default function AgencyOperations({
                                       next_status: nextStatus,
                                     });
                                     if (error) throw new Error(error.message);
+                                    notifyAlertsChanged();
                                     onAlertsChanged?.();
                                   }, 'Alert updated.')
                                 }
                               >
                                 {row.status === 'open' ? 'Acknowledge' : row.status === 'acknowledged' ? 'Resolve' : 'Reopen'}
+                              </button>
+                            )}
+                            {row.status === 'open' && roleCan(role, 'alert_resolve', platformAdmin) && (
+                              <button
+                                type="button"
+                                className="lv-secondary"
+                                disabled={busy}
+                                onClick={() => void run(() => resolveAlertDirect(row), 'Alert resolved.')}
+                              >
+                                Resolve directly
                               </button>
                             )}
                             {row.event_id && onInspectEvent && (
@@ -514,34 +771,72 @@ export default function AgencyOperations({
                         </>
                       )}
 
-                      {mode === 'rules' && (
+                      {mode === 'rules' && (() => {
+                        const info = describeRuleUseCase(row.object_label);
+                        const pct = Math.round(row.minimum_confidence * 100);
+                        return (
                         <>
-                          <p>
-                            {row.object_label} · minimum {Math.round(row.minimum_confidence * 100)}% confidence · {row.severity}{' '}
-                            priority · {row.cooldown_seconds}s cooldown · {row.enabled ? 'Enabled' : 'Disabled'}
+                          <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                            <span className="lv-badge" style={{ fontWeight: 700 }}>Target: {row.object_label}</span>
+                            <span className="lv-badge">Min confidence: {pct}%</span>
+                            <span className={`lunar-badge ${row.severity}`}>{row.severity} priority</span>
+                            <span className="lv-badge">Cooldown: {row.cooldown_seconds}s</span>
+                            <span className="lv-badge" style={{ borderColor: row.enabled ? '#2dd4bf' : '#64748b' }}>
+                              {row.enabled ? 'ACTIVE LIVE' : 'PAUSED'}
+                            </span>
+                          </div>
+                          <p style={{ margin: '0.45rem 0 0.2rem', fontSize: '0.88rem' }}>
+                            <strong>Use case ({info.title}):</strong> {info.useCase}
                           </p>
-                          {canManage && (
+                          <p style={{ margin: '0 0 0.5rem', fontSize: '0.82rem', color: '#94a3b8' }}>
+                            <strong>Trigger &amp; Response:</strong> When <code>{row.object_label}</code> ≥ {pct}% on live camera, video, or observation → {info.response}
+                          </p>
+                          <div className="lv-video-actions">
+                            {canManage && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  void run(async () => {
+                                    const { error } = await supabase.rpc('lv_update_agency_rule', {
+                                      target: row.id,
+                                      expected_revision: row.revision,
+                                      rule_name: row.name,
+                                      threshold: row.minimum_confidence,
+                                      priority: row.severity,
+                                      active: !row.enabled,
+                                      repeat_seconds: row.cooldown_seconds,
+                                    });
+                                    if (error) throw new Error(error.message);
+                                  }, 'Rule updated.')
+                                }
+                              >
+                                {row.enabled ? 'Disable rule' : 'Enable rule'}
+                              </button>
+                            )}
                             <button
                               type="button"
+                              className="lv-secondary"
                               disabled={busy}
                               onClick={() =>
                                 void run(async () => {
-                                  const { error } = await supabase.rpc('lv_update_agency_rule', {
-                                    target: row.id,
-                                    expected_revision: row.revision,
-                                    rule_name: row.name,
-                                    threshold: row.minimum_confidence,
-                                    priority: row.severity,
-                                    active: !row.enabled,
-                                    repeat_seconds: row.cooldown_seconds,
+                                  await dispatchOperationalAlert({
+                                    workspaceId,
+                                    kind: 'rule_trigger',
+                                    title: `AI Rule Test: ${row.name} (${row.object_label} ${pct}%)`,
+                                    details: `${info.useCase} (Manual rule test execution)`,
+                                    severity: row.severity,
+                                    cameraName: 'AI Rules Test Bench',
+                                    confidence: pct,
+                                    recommendedAction: info.response,
+                                    dedupeKey: `test-rule:${row.id}:${Date.now()}`,
                                   });
-                                  if (error) throw new Error(error.message);
-                                }, 'Rule updated.')
+                                }, `Triggered test popup & alert for rule "${row.name}".`)
                               }
                             >
-                              {row.enabled ? 'Disable rule' : 'Enable rule'}
+                              Test rule &amp; popup
                             </button>
-                          )}
+                          </div>
                           {canManage && (
                             <details>
                               <summary>Edit rule</summary>
@@ -583,19 +878,47 @@ export default function AgencyOperations({
                             </details>
                           )}
                         </>
-                      )}
+                        );
+                      })()}
 
-                      {mode === 'fleet' && (
+                      {mode === 'fleet' && (() => {
+                        const act = fleetActivity[row.id];
+                        const isActive24h =
+                          act?.last_event_at && Date.now() - new Date(act.last_event_at).getTime() < 24 * 3600_000;
+                        return (
                         <>
-                          <p>{row.location || 'Location not specified'}</p>
-                          <p className="lv-evidence-hash">{row.playback_url}</p>
-                          <div className="lv-video-actions">
-                            <button type="button" onClick={() => openCamera(row.id)}>
-                              Open camera
+                          <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                            <span className="lv-badge" style={{ borderColor: isActive24h ? '#2dd4bf' : undefined, fontWeight: 700 }}>
+                              {isActive24h ? 'ACTIVE TELEMETRY' : row.playback_url ? 'STREAM CONFIGURED' : 'AWAITING GATEWAY URL'}
+                            </span>
+                            <span className="lv-badge">{(row.stream_type || 'video').toUpperCase()}</span>
+                            <span className="lv-badge">Clearance {row.minimum_clearance ?? 0}</span>
+                            <span className="lv-badge">{act?.events_24h ?? 0} events (24h)</span>
+                          </div>
+                          <p style={{ margin: '0.35rem 0 0.15rem' }}>{row.location || 'Location not specified'}</p>
+                          <p className="lv-evidence-hash">{row.playback_url || 'No gateway playback URL configured yet.'}</p>
+                          {act?.last_event_at && (
+                            <small style={{ color: '#94a3b8' }}>Last telemetry: {new Date(act.last_event_at).toLocaleString()}</small>
+                          )}
+                          <div className="lv-video-actions" style={{ marginTop: '0.5rem' }}>
+                            <button type="button" disabled={!row.playback_url} onClick={() => openCamera(row.id)}>
+                              Open camera &amp; analyze
                             </button>
                             {canManage && onConfigureCamera && (
                               <button type="button" className="lv-secondary" onClick={() => onConfigureCamera(row.id)}>
                                 Configure intelligence &amp; zones
+                              </button>
+                            )}
+                            {row.playback_url && (
+                              <button
+                                type="button"
+                                className="lv-secondary"
+                                disabled={busy}
+                                onClick={() =>
+                                  void run(() => checkFleetStreamHealth(row), `Device "${row.name}" stream verified & heartbeat logged.`)
+                                }
+                              >
+                                Test stream
                               </button>
                             )}
                           </div>
@@ -640,7 +963,8 @@ export default function AgencyOperations({
                             </details>
                           )}
                         </>
-                      )}
+                        );
+                      })()}
                     </div>
 
                     {mode === 'alerts' && snapUrls[row.id] && (
@@ -725,6 +1049,66 @@ export default function AgencyOperations({
         </>
       )}
 
+      {mode === 'fleet' && canManage && (
+        <details style={{ marginTop: '0.85rem' }}>
+          <summary>+ Register new camera device to fleet</summary>
+          <form
+            onSubmit={(event) =>
+              submit(
+                event,
+                async (fields) => {
+                  const url = new URL(String(fields.get('url')).trim());
+                  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+                    throw new Error('Enter an HTTPS playback URL without embedded credentials.');
+                  }
+                  const { error } = await supabase.from('lv_cameras').insert({
+                    workspace_id: workspaceId,
+                    name: String(fields.get('name')).trim(),
+                    location: String(fields.get('location') || '').trim(),
+                    playback_url: url.href,
+                    stream_type: String(fields.get('stream_type') || 'video'),
+                    minimum_clearance: Number(fields.get('clearance') || 0),
+                  });
+                  if (error) throw new Error(error.message);
+                },
+                'Camera device registered to fleet.',
+              )
+            }
+          >
+            <label>
+              Device name
+              <input name="name" minLength={2} maxLength={100} placeholder="e.g. Apapa Gate 1" required />
+            </label>
+            <label>
+              Location
+              <input name="location" maxLength={200} placeholder="e.g. Main perimeter entrance" />
+            </label>
+            <label>
+              HTTPS playback URL
+              <input name="url" type="url" maxLength={2048} placeholder="https://gateway.example.com/cam1.m3u8" required />
+            </label>
+            <label>
+              Stream format
+              <select name="stream_type" defaultValue="video">
+                <option value="video">MP4 / WebM video</option>
+                <option value="hls">HLS camera gateway (.m3u8)</option>
+                <option value="mjpeg">MJPEG live feed</option>
+              </select>
+            </label>
+            <label>
+              Minimum clearance
+              <select name="clearance" defaultValue="0">
+                <option value="0">0 · General</option>
+                <option value="1">1 · Internal</option>
+                <option value="2">2 · Restricted</option>
+                <option value="3">3 · Confidential</option>
+              </select>
+            </label>
+            <button disabled={busy || loading || failed}>Register camera</button>
+          </form>
+        </details>
+      )}
+
       {mode === 'rules' && canManage && (
         <details>
           <summary>Create a detection rule</summary>
@@ -733,15 +1117,23 @@ export default function AgencyOperations({
               submit(
                 event,
                 async (fields) => {
+                  const label = String(fields.get('label') || '');
                   const { error } = await supabase.from('lv_agency_rules').insert({
                     workspace_id: workspaceId,
                     name: String(fields.get('name')).trim(),
-                    object_label: fields.get('label'),
+                    object_label: label,
                     minimum_confidence: Number(fields.get('confidence')) / 100,
                     severity: fields.get('severity'),
                     cooldown_seconds: Number(fields.get('cooldown')),
                   });
-                  if (error) throw new Error('Rule could not be saved. Check your access and retry.');
+                  if (error) {
+                    if (error.message.includes('object_label') && (label === 'knife' || label === 'person')) {
+                      throw new Error(
+                        'Built-in Weapon (knife/scissors/bat) & People detection are already enabled by default on all cameras. Run migration 202611130001 to also store custom database rules for knife/person.',
+                      );
+                    }
+                    throw new Error('Rule could not be saved. Check your access and retry.');
+                  }
                 },
                 'Rule saved and enabled for future saved observations.',
               )

@@ -346,7 +346,7 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     await act(async () => { enrollBtn.click(); });
     expect(host.textContent).toContain('Agency Subject Enrollment, Bulk Migration & Biometric Dossiers');
     expect(host.textContent).toContain('Enroll New Biometric Subject / Convict Dossier');
-    expect(host.textContent).toContain('Enroll Convict / Subject & Register on Face++');
+    expect(host.textContent).toContain('Enroll Convict / Subject & Register on FaceDB');
 
     // Open Search history and verify live search audit history renders
     const histBtn = host.querySelector('button[aria-label="Search history"]') as HTMLButtonElement;
@@ -451,6 +451,70 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     await renderAndFlush(<WorkspacePortalComp agency={false} platformView={false}/>);
     const labels=Array.from(host.querySelectorAll('nav button')).map(button=>button.textContent);
     expect(labels).toContain('Cameras');expect(labels).not.toContain('Playback');expect(labels).not.toContain('Sites & incidents');
+  });
+
+  it('resolves open incident/investigation cases cleanly and renders global live popup alerts', async () => {
+    let currentStatus = 'open';
+    setupMockDb({
+      workspaces: [{ id: 'ag-1', name: 'Lagos State Command', kind: 'agency', active: true, entitlement: 'Tier 1', organization_details: '' }],
+      memberships: [{ workspace_id: 'ag-1', role: 'admin' }],
+      records: [
+        { id: 'inv-99', title: 'Stolen Truck Corridor Case', details: 'Track LAG-123-AA', category: 'investigation', status: 'open', created_at: '2026-11-11T09:00:00Z' },
+      ],
+    });
+    const baseRpc = mockRpc.getMockImplementation()!;
+    mockRpc.mockImplementation(async (name: string, args: any) => {
+      if (name === 'lv_change_record_status') {
+        if (args.expected_status === 'open' && args.new_status === 'resolved') {
+          return { data: null, error: { message: 'Invalid status transition' } };
+        }
+        currentStatus = args.new_status;
+        return {
+          data: {
+            id: 'inv-99',
+            title: 'Stolen Truck Corridor Case',
+            details: 'Track LAG-123-AA',
+            category: 'investigation',
+            status: currentStatus,
+            created_at: '2026-11-11T09:00:00Z',
+          },
+          error: null,
+        };
+      }
+      return baseRpc(name, args);
+    });
+
+    await renderAndFlush(<WorkspacePortalComp agency={true} platformView={false} />);
+
+    const incidentsBtn = host.querySelector('button[aria-label="Incidents"]') as HTMLButtonElement;
+    expect(incidentsBtn).toBeTruthy();
+    await act(async () => { incidentsBtn.click(); });
+    expect(host.textContent).toContain('Stolen Truck Corridor Case');
+
+    const resolveBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.textContent?.trim() === 'Resolve case',
+    )!;
+    expect(resolveBtn).toBeTruthy();
+    await act(async () => { resolveBtn.click(); });
+    for (let i = 0; i < 6; i++) {
+      await act(async () => { await Promise.resolve(); });
+    }
+    expect(currentStatus).toBe('resolved');
+    expect(host.textContent).toContain('Case "Stolen Truck Corridor Case" resolved.');
+
+    // Verify global LiveAlertPopupHost reacts to watchlist / face / weapon events across any tab
+    const { emitLiveAlert } = await import('../services/liveAlertBus');
+    await act(async () => {
+      emitLiveAlert({
+        workspaceId: 'ag-1',
+        kind: 'watchlist_match',
+        title: 'Watchlist Match: LAG123AA (Stolen vehicle)',
+        details: 'Matched at Apapa Gate Camera',
+        severity: 'high',
+        plate: 'LAG123AA',
+      });
+    });
+    expect(document.body.textContent).toContain('Watchlist Match: LAG123AA (Stolen vehicle)');
   });
 });
 

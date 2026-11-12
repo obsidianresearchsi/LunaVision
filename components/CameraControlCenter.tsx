@@ -293,12 +293,24 @@ export const CameraControlCenter: React.FC<{
     setSaving(true);
     setError(null);
     setNotice(null);
-    const { data, error: saveError } = await supabase.rpc('lv_save_camera_intel', {
+    let { data, error: saveError } = await supabase.rpc('lv_save_camera_intel', {
       target: workspaceId,
       camera: selectedCameraId,
       expected_revision: revision,
       new_settings: settings,
     });
+    // Graceful fallback if deployed DB schema hasn't enabled 'weapon_detection' key yet
+    if (saveError && saveError.message.includes('Unsupported capability') && settings.capabilities.weapon_detection) {
+      const { weapon_detection: _omitted, ...legacyCaps } = settings.capabilities as Record<string, any>;
+      const retry = await supabase.rpc('lv_save_camera_intel', {
+        target: workspaceId,
+        camera: selectedCameraId,
+        expected_revision: revision,
+        new_settings: { ...settings, capabilities: legacyCaps },
+      });
+      data = retry.data;
+      saveError = retry.error;
+    }
     setSaving(false);
     if (saveError) {
       setError(saveError.message);

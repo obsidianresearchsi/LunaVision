@@ -20,6 +20,8 @@ import WorkspaceObservations from '../components/WorkspaceObservations';
 import VideoAnalysis from '../components/VideoAnalysis';
 import AgencyOperations from '../components/AgencyOperations';
 import SubjectEnrollmentCenter from '../components/SubjectEnrollmentCenter';
+import LiveAlertPopupHost from '../components/LiveAlertPopup';
+import { subscribeAlertsChanged } from '../services/liveAlertBus';
 import { defaultFeatureMap, WorkspaceFeatureMap } from '../services/videoIntelligence';
 import {
   Activity,
@@ -67,7 +69,7 @@ type RecordStatus = 'open' | 'in_review' | 'resolved';
 type RecordRow = { id: string; title: string; details: string; category: string; status: RecordStatus; created_at: string; latitude?: number | null; longitude?: number | null };
 const recordColumns = 'id,title,details,category,status,created_at,latitude,longitude';
 const statusLabel = { open: 'Open', in_review: 'In review', resolved: 'Resolved' };
-const statusActions = { open: ['in_review'], in_review: ['open', 'resolved'], resolved: ['open'] } as const;
+const statusActions = { open: ['in_review', 'resolved'], in_review: ['open', 'resolved'], resolved: ['open'] } as const;
 const portalEnabled = workspaceEnabled && import.meta.env.VITE_WORKSPACE_PORTAL_ENABLED === 'true';
 const googleEnabled = import.meta.env.VITE_GOOGLE_SIGN_IN_ENABLED === 'true';
 const emailFlowsEnabled = import.meta.env.VITE_EMAIL_AUTH_FLOWS_ENABLED !== 'false';
@@ -337,8 +339,10 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
         });
       }
     });
+    const unsub = subscribeAlertsChanged(() => setAlertTick((t) => t + 1));
     return () => {
       active = false;
+      unsub();
     };
   }, [account, selected, isMember, platformView, agency, alertTick, panel]);
 
@@ -367,6 +371,33 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       current = false;
     };
   }, [account, selected, isMember, recordsAttempt]);
+
+  async function transitionRecordStatus(record: RecordRow, nextStatus: RecordStatus) {
+    let { data, error } = await supabase.rpc('lv_change_record_status', {
+      target_id: record.id,
+      expected_status: record.status,
+      new_status: nextStatus,
+    });
+    // Fallback for databases enforcing open -> in_review -> resolved two-step workflow
+    if (error && record.status === 'open' && nextStatus === 'resolved' && error.message.includes('Invalid status transition')) {
+      const mid = await supabase.rpc('lv_change_record_status', {
+        target_id: record.id,
+        expected_status: 'open',
+        new_status: 'in_review',
+      });
+      if (mid.error) throw new Error(mid.error.message);
+      const fin = await supabase.rpc('lv_change_record_status', {
+        target_id: record.id,
+        expected_status: 'in_review',
+        new_status: 'resolved',
+      });
+      data = fin.data;
+      error = fin.error;
+    }
+    if (error) throw new Error(error.message);
+    const updated = data as RecordRow;
+    setRecords((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>, operation: (fields: FormData) => Promise<void>) {
     event.preventDefault();
@@ -1327,17 +1358,32 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                             <RecordLocationEditor workspaceId={selected} record={record} readOnly={membership?.role === 'viewer'} onUpdated={position => setRecords(previous => previous.map(item => item.id === record.id ? {...item, latitude:position?.latitude??null, longitude:position?.longitude??null} : item))}/>
                             {record.category !== 'site' && (
                               <>
+                                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+                                  <span className="lv-badge" style={{ borderColor: record.status === 'resolved' ? '#2dd4bf' : '#f59e0b', fontWeight: 700 }}>
+                                    Status: {statusLabel[record.status]}
+                                  </span>
+                                  {record.status !== 'resolved' && (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => {
+                                        setBusy(true);
+                                        setNotice('');
+                                        void transitionRecordStatus(record, 'resolved')
+                                          .then(() => setNotice(`Case "${record.title}" resolved.`))
+                                          .catch((err) => setNotice(err instanceof Error ? err.message : 'Could not resolve incident.'))
+                                          .finally(() => setBusy(false));
+                                      }}
+                                    >
+                                      Resolve case
+                                    </button>
+                                  )}
+                                </div>
                                 <form
                                   onSubmit={(event) =>
                                     submit(event, async (fields) => {
-                                      const { data, error } = await supabase.rpc('lv_change_record_status', {
-                                        target_id: record.id,
-                                        expected_status: record.status,
-                                        new_status: fields.get('status'),
-                                      });
-                                      if (error) throw new Error(error.message);
-                                      const updated = data as RecordRow;
-                                      setRecords((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+                                      const nextStatus = String(fields.get('status') || '') as RecordStatus;
+                                      await transitionRecordStatus(record, nextStatus);
                                     })
                                   }
                                 >
@@ -1415,6 +1461,17 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
               </>
             )}
           </>
+        )}
+        {!platformView && isMember && selected && (
+          <LiveAlertPopupHost
+            workspaceId={selected}
+            onOpenAlerts={() => navigate('alerts')}
+            onInspectEvent={inspectEvent}
+            onOpenCamera={(camId) => {
+              setRequestedCamera(camId);
+              navigate('cameras');
+            }}
+          />
         )}
       </main>
     </div>

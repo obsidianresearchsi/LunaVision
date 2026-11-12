@@ -326,7 +326,7 @@ describe('Video Intelligence UI Workflows', () => {
         await Promise.resolve();
       });
 
-      expect(host.textContent).toContain('1:N Database Search');
+      expect(host.textContent).toContain('Face search');
       expect(host.textContent).toContain('INV-2026-88');
       expect(host.textContent).toContain('87.4%');
 
@@ -575,7 +575,7 @@ describe('Video Intelligence UI Workflows', () => {
           ],
         }),
       );
-      expect(host.textContent).toContain('Enrolled on Face++ & Dossier Database: Suleiman Bello');
+      expect(host.textContent).toContain('Enrolled on FaceDB & Dossier Database: Suleiman Bello');
       expect(host.textContent).toContain(submittedCode);
       expect(host.textContent).toContain('ftok_convict_901');
       const nextCodeInput = host.querySelector<HTMLInputElement>('input[name="subject_code"]')!;
@@ -583,7 +583,7 @@ describe('Video Intelligence UI Workflows', () => {
       expect(nextCodeInput.value).not.toBe(submittedCode);
 
       const searchBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-        b.textContent?.includes('Search in 1:N Face Search'),
+        b.textContent?.includes('Face search'),
       )!;
       expect(searchBtn).toBeTruthy();
       await act(async () => {

@@ -1,6 +1,8 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { compressImage } from '../utils/imageCompression';
+import { dispatchOperationalAlert, emitLiveAlert } from '../services/liveAlertBus';
+import VehicleImageRecognition from './VehicleImageRecognition';
 import {
   WatchlistImportRowInput,
   isValidNormalizedPlate,
@@ -116,9 +118,21 @@ export function PlateWatchlistCheck({
 
       if (match) {
         const vehDesc = [match.colour, match.make, match.model].filter(Boolean).join(' ');
-        setResult(
-          `MATCH: ${confirmedPlate} · ${formatReason(match)} (${STATUS_LABELS[match.status] || match.status}) · Case ${match.case_reference}${vehDesc ? ` · ${vehDesc}` : ''}.${match.description ? ` ${match.description}` : ''}${regNote}`,
-        );
+        const msg = `MATCH: ${confirmedPlate} · ${formatReason(match)} (${STATUS_LABELS[match.status] || match.status}) · Case ${match.case_reference}${vehDesc ? ` · ${vehDesc}` : ''}.${match.description ? ` ${match.description}` : ''}${regNote}`;
+        setResult(msg);
+        if (match.reason !== 'authorized') {
+          await dispatchOperationalAlert({
+            workspaceId,
+            kind: 'watchlist_match',
+            title: `Watchlist Match: ${confirmedPlate} (${formatReason(match)})`,
+            details: msg,
+            severity: match.reason === 'stolen' || match.reason === 'wanted' ? 'high' : 'medium',
+            plate: confirmedPlate,
+            cameraName: 'Manual Plate Watchlist Check',
+            recommendedAction: `Verify Case ${match.case_reference} and notify responding patrol unit.`,
+            dedupeKey: `manual-wl:${workspaceId}:${confirmedPlate}`,
+          });
+        }
       } else {
         setResult(`No active watchlist entry for ${confirmedPlate}.${regNote}`);
       }
@@ -200,6 +214,9 @@ export default function VehicleWatchlist({
   // Create form controlled states for category + file
   const [newReason, setNewReason] = useState<WatchlistReason>('stolen');
   const [newPhotoFile, setNewPhotoFile] = useState<File | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [draftPlate, setDraftPlate] = useState('');
+  const [draftColour, setDraftColour] = useState('');
 
   // Editing state
   const [editing, setEditing] = useState<WatchlistEntry | null>(null);
@@ -314,9 +331,53 @@ export default function VehicleWatchlist({
       }
       form.reset();
       setNewPhotoFile(null);
+      setDraftPlate('');
+      setDraftColour('');
       setNewReason('stolen');
       setRefresh((previous) => previous + 1);
       setNotice(`Watchlist entry added for plate ${normalizedPlate}.`);
+
+      // Check if this newly flagged plate was already spotted in recent ANPR events -> trigger popup alert!
+      try {
+        const { data: recentHit } = await supabase
+          .from('lv_intel_events')
+          .select('id,camera_id,occurred_at,confidence')
+          .eq('workspace_id', workspaceId)
+          .eq('category', 'plate_read')
+          .eq('plate', normalizedPlate)
+          .order('occurred_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (recentHit && reason !== 'authorized') {
+          await dispatchOperationalAlert({
+            workspaceId,
+            kind: 'watchlist_match',
+            title: `Watchlist Match Found: ${normalizedPlate} (${formatReason({ reason, custom_category: customCategory })})`,
+            details: `Newly watchlisted plate ${normalizedPlate} matches a recorded sighting at ${new Date(recentHit.occurred_at).toLocaleString()} (Case ${String(fields.get('case')).trim()}).`,
+            severity: reason === 'stolen' || reason === 'wanted' ? 'high' : 'medium',
+            cameraId: recentHit.camera_id ?? null,
+            cameraName: 'Recent ANPR / Camera Sighting',
+            plate: normalizedPlate,
+            eventId: recentHit.id,
+            recommendedAction: 'Inspect historical sighting event and dispatch field response.',
+            dedupeKey: `retro-wl:${workspaceId}:${normalizedPlate}`,
+          });
+        } else {
+          emitLiveAlert({
+            workspaceId,
+            kind: 'watchlist_match',
+            title: `Watchlist Alert Armed: ${normalizedPlate}`,
+            details: `${formatReason({ reason, custom_category: customCategory })} · Case ${String(fields.get('case')).trim()}. Real-time popup alerts will fire whenever cameras or image scans detect ${normalizedPlate}.`,
+            severity: reason === 'stolen' || reason === 'wanted' ? 'high' : 'medium',
+            plate: normalizedPlate,
+            cameraName: 'Vehicle Watchlist Desk',
+            dedupeKey: `armed-wl:${workspaceId}:${normalizedPlate}`,
+          });
+        }
+      } catch {
+        // Non-fatal alert dispatch check
+      }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'The entry could not be added.');
     } finally {
@@ -557,15 +618,35 @@ export default function VehicleWatchlist({
 
       <PlateWatchlistCheck workspaceId={workspaceId} />
 
+      <VehicleImageRecognition
+        workspaceId={workspaceId}
+        onPrefillWatchlistPlate={
+          canWrite
+            ? (plate, info) => {
+                setDraftPlate(plate);
+                if (info.colour && info.colour !== 'Unknown colour') setDraftColour(info.colour);
+                setManualOpen(true);
+              }
+            : undefined
+        }
+      />
+
       {canWrite ? (
-        <details style={{ marginTop: '1rem' }}>
+        <details style={{ marginTop: '1rem' }} open={manualOpen} onToggle={(e) => setManualOpen(e.currentTarget.open)}>
           <summary style={{ cursor: 'pointer', color: '#76efd6', fontWeight: 600 }}>
             + Register vehicle of interest manually
           </summary>
           <form onSubmit={add} className="lv-form-grid">
             <label>
               Number plate
-              <input name="plate" maxLength={20} placeholder="e.g. KJA-492-AX" required />
+              <input
+                name="plate"
+                maxLength={20}
+                value={draftPlate}
+                onChange={(e) => setDraftPlate(e.target.value)}
+                placeholder="e.g. KJA-492-AX"
+                required
+              />
             </label>
             <label>
               Category
@@ -609,7 +690,13 @@ export default function VehicleWatchlist({
             </label>
             <label>
               Colour
-              <input name="colour" maxLength={60} placeholder="e.g. Silver" />
+              <input
+                name="colour"
+                maxLength={60}
+                value={draftColour}
+                onChange={(e) => setDraftColour(e.target.value)}
+                placeholder="e.g. Silver"
+              />
             </label>
             <label>
               Vehicle photograph (optional, private encrypted storage)

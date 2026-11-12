@@ -217,6 +217,7 @@ export function WorkspaceCameras({
                 setPlayback('connecting');
                 setFeedAttempt((attempt) => attempt + 1);
                 setActive(camera);
+                setShowAnalysis(true);
               }}
             >
               Open feed
@@ -310,8 +311,10 @@ export function WorkspaceCameras({
           />
         </article>
       )}
-      <details onToggle={(event) => setShowAnalysis(event.currentTarget.open)}>
-        <summary>Analyze footage</summary>
+      <details open={showAnalysis} onToggle={(event) => setShowAnalysis(event.currentTarget.open)}>
+        <summary>
+          Analyze footage &amp; live intelligence (ANPR, face recognition, weapon &amp; vehicle logging)
+        </summary>
         {showAnalysis && (
           <VideoAnalysis
             key={active?.id ?? 'local'}
