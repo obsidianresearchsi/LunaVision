@@ -438,7 +438,7 @@ export default function FaceComparison({
             </button>
             {onOpenEnrollment && (
               <button type="button" onClick={onOpenEnrollment}>
-                + Enroll Convict / Subject
+                Enroll Convict / Subject
               </button>
             )}
             {onOpenHistory && (
