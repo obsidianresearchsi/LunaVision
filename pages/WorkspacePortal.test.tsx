@@ -256,6 +256,34 @@ describe('WorkspacePortal dashboards (Business, Agency, Super Admin)', () => {
     expect(host.querySelector('[name=name]')).not.toBeNull();
   });
 
+  it.each([
+    { agency: false, home: 'Home', activity: 'Activity' },
+    { agency: true, home: 'Command', activity: 'Incidents' },
+  ])('keeps mobile workspace routes available for agency=$agency', async ({ agency, home, activity }) => {
+    setupMockDb({
+      workspaces: [{ id: 'mobile', name: 'Mobile workspace', kind: agency ? 'agency' : 'business', active: true, entitlement: '', organization_details: '' }],
+      memberships: [{ workspace_id: 'mobile', role: 'member' }],
+    });
+    await renderAndFlush(<WorkspacePortalComp agency={agency} platformView={false} />);
+
+    const tabs = host.querySelector('nav[aria-label="Quick navigation"]')!;
+    expect(Array.from(tabs.querySelectorAll('button'), button => button.textContent)).toEqual([home, 'Cameras', 'Alerts', activity, 'More']);
+    expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe(home);
+    const sheet = host.querySelector<HTMLDialogElement>('dialog[aria-label="Workspace menu"]')!;
+    Object.defineProperties(sheet, {
+      showModal: { value: () => { sheet.open = true; } },
+      close: { value: () => { sheet.open = false; } },
+    });
+    await act(async () => { tabs.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click(); });
+    expect(sheet.open).toBe(true);
+    expect(sheet.textContent).not.toContain(agency ? 'Officer management' : 'Organization staff');
+    const playback = Array.from(sheet.querySelectorAll('button')).find(button => button.textContent === 'Playback')!;
+    await act(async () => { playback.click(); });
+    expect(sheet.open).toBe(false);
+    expect(host.textContent).toContain('Mock VideoAnalysis mobile');
+    expect(tabs.querySelector('[aria-haspopup="dialog"]')?.getAttribute('data-active')).toBe('true');
+  });
+
   it('renders Business Dashboard with Playback, Change password, record filtering, and status history', async () => {
     setupMockDb({
       workspaces: [{ id: 'biz-1', name: 'Meridian Logistics', kind: 'business', active: true, entitlement: 'Enterprise', organization_details: 'Apapa port terminal' }],

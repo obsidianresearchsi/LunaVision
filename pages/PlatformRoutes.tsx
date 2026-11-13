@@ -9,6 +9,7 @@ import '../styles/surveillance-demo.css';
 import '../styles/analyst-review.css';
 import '../styles/reports.css';
 import '../styles/lunar-vision.css';
+import '../styles/mobile-workspace.css';
 
 export default function PlatformRoutes() {
   const path = location.pathname.replace(/\/$/, '') || '/';

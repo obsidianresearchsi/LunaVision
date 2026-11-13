@@ -7,6 +7,7 @@ import {
 import { User, UserRole } from '../types';
 import { supabaseDb } from '../services/supabaseDb';
 import { NotificationBell } from './NotificationBell';
+import MobileWorkspaceNav from './MobileWorkspaceNav';
 
 const investigationItems = [
   { id: 'search', label: 'Face search', icon: Search },
@@ -96,7 +97,6 @@ export const Layout: React.FC<LayoutProps> = ({
   const heading = items.find(item => item.id === active)?.label ?? 'Workspace';
   const matches = query.trim() ? items.filter(item => (item.id === 'search' ? item.label + ' investigation' : item.label).toLowerCase().includes(query.trim().toLowerCase())) : [];
   const workspace = scopedWorkspace?.name ?? (preview ? 'Meridian Port' : 'Operations workspace');
-  const fieldItems = scopedWorkspace ? items.filter(item => ['command', 'cameras', 'records', 'history'].includes(item.id)) : mobileItems;
 
   function navigate(page: string) {
     setMobileOpen(false);
@@ -128,12 +128,16 @@ export const Layout: React.FC<LayoutProps> = ({
   }
 
   return (
-    <div className="eagle-app lunar-app" data-collapsed={collapsed} data-mobile-open={mobileOpen}>
+    <div className="eagle-app lunar-app" data-collapsed={collapsed} data-mobile-open={mobileOpen} data-mobile-workspace={Boolean(scopedWorkspace)}>
       <header className="lunar-topbar">
         <button className="lunar-icon lunar-mobile-menu" aria-label="Toggle navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(!mobileOpen)}>
           <Menu size={19} />
         </button>
         <div className="lunar-breadcrumb"><span>{workspace}</span><span aria-hidden="true">/</span><strong>{heading}</strong></div>
+        {scopedWorkspace && <div className="lv-mobile-topbar lv-mobile-agency-brand">
+          <img src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="142" />
+          <span>Agency</span>
+        </div>}
         <div className="lunar-header-actions">
           <form className="lunar-search" role="search" onSubmit={event => { event.preventDefault(); if (matches[0]) navigate(matches[0].id); }}>
             <Search size={14} />
@@ -190,10 +194,14 @@ export const Layout: React.FC<LayoutProps> = ({
         <div className="command-content lunar-content" data-investigation={canOpenInvestigationPage(active, user.role)}>{children}</div>
         {rightPanel && <aside className="lunar-inspector" aria-label="Inspector">{rightPanel}</aside>}
       </main>
-      <nav className="lunar-mobile-nav" aria-label="Field navigation">
-        {fieldItems.map(({ id, label, icon: Icon }) =>
+      {scopedWorkspace ? <MobileWorkspaceNav workspace={workspace} active={active} groups={visibleGroups}
+        tabs={[{ id: 'command', label: 'Command' }, { id: 'cameras', label: 'Cameras' }, { id: 'alerts', label: 'Alerts' }, { id: 'records', label: 'Incidents' }]}
+        onNavigate={navigate}
+        controls={<>{scopedWorkspace.controls}<button type="button" onClick={onLogout}><LogOut size={18} aria-hidden="true" /> Sign out</button></>}
+      /> : <nav className="lunar-mobile-nav" aria-label="Field navigation">
+        {mobileItems.map(({ id, label, icon: Icon }) =>
           <button key={id} aria-current={active === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={19} />{label}</button>)}
-      </nav>
+      </nav>}
     </div>
   );
 };

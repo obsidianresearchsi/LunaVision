@@ -1,0 +1,204 @@
+.lv-mobile-navigation,
+.lv-mobile-topbar,
+.lv-mobile-signin-heading,
+.lv-signin-field > svg {
+  display: none;
+}
+
+.lv-signin-field { display: block; }
+
+@media screen and (max-width: 760px) {
+  .lv-workspace-signin {
+    place-items: start center;
+    padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right))
+      max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+    background: radial-gradient(ellipse at 50% 0%, #173535 0%, transparent 46%), #0c131b;
+  }
+
+  .lv-workspace-signin .lv-signin-panel {
+    width: min(100%, 420px);
+    margin: 0;
+    border: 0;
+    padding: clamp(28px, 9dvh, 80px) 0 18px;
+    background: transparent;
+  }
+
+  .lv-signin-logo { margin: 0 auto; width: 148px; }
+
+  .lv-mobile-signin-heading {
+    display: grid;
+    place-items: center;
+    width: 78px;
+    height: 78px;
+    margin: 36px auto 21px;
+    background: linear-gradient(145deg, #1c393c, #12252e);
+    border: 1px solid #345354;
+    border-radius: 23px;
+    box-shadow: 0 12px 30px #030b1150;
+  }
+
+  .lv-mobile-signin-heading img { width: 48px; height: 48px; object-fit: contain; }
+  .lv-workspace-signin h1 { margin: 0; text-align: center; font-size: 31px; line-height: 1.15; letter-spacing: -.04em; }
+  .lv-workspace-signin .lv-signin-panel > p { margin-top: 16px; text-align: center; overflow-wrap: anywhere; }
+  .lv-workspace-signin form { margin-top: 33px; gap: 13px; }
+  .lv-workspace-signin label { font-size: 13px; font-weight: 600; }
+  .lv-signin-field { position: relative; }
+  .lv-signin-field > svg { display: block; position: absolute; top: 17px; left: 15px; color: #9bb3bf; pointer-events: none; }
+
+  .lv-workspace-signin .lv-signin-field input {
+    min-height: 54px;
+    border-color: #30434f;
+    border-radius: 14px;
+    padding: 11px 12px 11px 46px;
+    background: #15222d;
+    font-size: 16px;
+    font-weight: 400;
+  }
+
+  .lv-workspace-signin form button { min-height: 48px; border-radius: 14px; font-size: 15px; }
+  .lv-workspace-signin [type="submit"], .lv-workspace-signin button:not([type]) { margin-top: 5px; min-height: 54px; }
+  .lv-workspace-signin .lv-secondary { background: #172630; color: #cce1e9; }
+  .lv-workspace-signin [role="status"] { color: #cce1e9; }
+
+  .lv-business-signup { padding: max(16px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
+  .lv-signup-topbar { min-height: 48px; }
+  .lv-signup-topbar .lv-signup-back { min-height: 44px; }
+  .lv-signup-shell { margin: 32px auto 24px; }
+  .lv-signup-intro { display: none; }
+  .lv-business-signup .lv-signup-card { border-radius: 24px; padding: 22px 18px; }
+  .lv-business-signup .lv-signup-card input { font-size: 16px; min-height: 50px; border-radius: 12px; }
+  .lv-business-signup .lv-signup-card button { min-height: 44px; border-radius: 12px; }
+
+  .lv-console,
+  .lunar-app[data-mobile-workspace="true"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100dvh;
+    overflow: hidden;
+    background: #0c131b;
+  }
+
+  .lv-console > .lv-console-rail,
+  .lunar-app[data-mobile-workspace="true"] .lunar-sidebar,
+  .lunar-app[data-mobile-workspace="true"] .lunar-topbar > :is(.lunar-mobile-menu, .lunar-breadcrumb, .lunar-header-actions) {
+    display: none;
+  }
+
+  .lv-mobile-topbar {
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: calc(56px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    background: #101a24;
+    border-bottom: 1px solid #263744;
+  }
+
+  .lv-mobile-topbar img { width: 138px; height: 28px; object-fit: contain; object-position: left center; }
+  .lv-mobile-topbar > span { color: #b5d4d9; font-size: 12px; font-weight: 600; }
+  .lunar-app[data-mobile-workspace="true"] > .lunar-topbar { padding: 0; }
+  .lv-mobile-agency-brand { width: 100%; border: 0; }
+
+  .lv-console > .lv-console-main,
+  .lunar-app[data-mobile-workspace="true"] .lunar-content {
+    min-height: 0;
+    height: auto;
+    overflow: auto;
+    overscroll-behavior-y: contain;
+    padding: 16px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
+  }
+
+  :is(.lv-console, .lv-restored-agency) .lv-console-heading { align-items: flex-start; gap: 8px 12px; }
+  :is(.lv-console, .lv-restored-agency) .lv-console-heading h1 { font-size: 30px; line-height: 1.13; margin-top: 4px; }
+  :is(.lv-console, .lv-restored-agency) .lv-console-heading p { font: 13px/1.4 Inter, sans-serif; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
+  :is(.lv-console, .lv-restored-agency) .lv-dashboard-return { flex-wrap: wrap; gap: 0 14px; margin-bottom: 8px; }
+  :is(.lv-console, .lv-restored-agency) .lv-dashboard-return :is(a, button) { display: inline-flex; align-items: center; min-height: 44px; }
+  :is(.lv-console, .lv-restored-agency) .lv-console-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  :is(.lv-console, .lv-restored-agency) .lv-console-metrics button { border-radius: 14px; padding: 13px; }
+  :is(.lv-console, .lv-restored-agency) .lv-console-metrics strong { font-size: 24px; }
+  :is(.lv-console, .lv-restored-agency) :is(.lv-card, .lv-panel) { border-radius: 16px; padding: 15px; min-width: 0; }
+  :is(.lv-console, .lv-restored-agency) :is(.lv-grid, .lv-card-grid, .lv-form-grid) { grid-template-columns: minmax(0, 1fr); }
+  :is(.lv-console, .lv-restored-agency) :is(.lv-card, .lv-panel) :is(input:not([type="checkbox"], [type="radio"]), textarea, select) { font-size: 16px; min-height: 44px; }
+  :is(.lv-console, .lv-restored-agency) :is(.lv-btn, .lv-card form button) { min-height: 44px; }
+  .lv-restored-agency .lv-command-map-grid[data-command="true"] .lv-command-map-canvas { height: clamp(290px, 43dvh, 410px); }
+
+  .lv-mobile-navigation {
+    display: block;
+    grid-row: 3;
+    min-width: 0;
+    z-index: 46;
+    background: #111e29;
+    border-top: 1px solid #2c404d;
+  }
+
+  .lv-mobile-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+  .lv-mobile-tabs button {
+    flex: 1 1 0;
+    max-width: 110px;
+    min-width: 0;
+    min-height: 54px;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 2px;
+    border-radius: 11px;
+    color: #abc0cc;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .lv-mobile-tab-icon { display: grid; place-items: center; width: 45px; height: 27px; border-radius: 16px; }
+  .lv-mobile-tabs button:is([aria-current="page"], [data-active="true"]) { color: #91f5e0; }
+  .lv-mobile-tabs button:is([aria-current="page"], [data-active="true"]) .lv-mobile-tab-icon { background: #23443f; }
+  .lv-mobile-tabs button:active { background: #1b2e3a; }
+
+  .lv-mobile-sheet {
+    position: fixed;
+    inset: auto 0 0;
+    width: min(100%, 560px);
+    max-width: none;
+    max-height: min(82dvh, 700px);
+    margin: 0 auto;
+    padding: 0;
+    overflow: hidden;
+    color: #edf5f7;
+    background: #14222d;
+    border: 1px solid #344957;
+    border-radius: 25px 25px 0 0;
+  }
+  .lv-mobile-sheet::backdrop { background: #030a11b8; }
+  .lv-mobile-sheet-inner { display: flex; flex-direction: column; max-height: min(82dvh, 700px); }
+  .lv-mobile-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid #31434f; }
+  .lv-mobile-sheet-header h2 { font-weight: 700; font-size: 18px; }
+  .lv-mobile-sheet-header p { color: #a6bac7; font-size: 13px; overflow-wrap: anywhere; }
+  .lv-mobile-sheet-header button { display: grid; flex-shrink: 0; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: #223542; }
+  .lv-mobile-sheet-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 16px max(20px, env(safe-area-inset-bottom)); }
+  .lv-mobile-sheet-group + .lv-mobile-sheet-group { margin-top: 16px; }
+  .lv-mobile-sheet-group h3 { margin: 0 8px 6px; font-size: 12px; font-weight: 600; color: #a6bac7; }
+  .lv-mobile-sheet-group button, .lv-mobile-sheet-controls :is(a, button) {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    min-height: 48px;
+    border-radius: 11px;
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 14px;
+  }
+  .lv-mobile-sheet-group button span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .lv-mobile-sheet-group button[aria-current="page"] { color: #91f5e0; background: #203f3c; }
+  .lv-mobile-sheet-controls { margin-top: 14px; padding-top: 12px; border-top: 1px solid #31434f; }
+  .lv-mobile-sheet-controls label { display: grid; gap: 6px; color: #b5c8d3; font-size: 13px; }
+  .lv-mobile-sheet-controls .lv-console-switch { grid-template-columns: auto 1fr; }
+  .lv-mobile-sheet-controls select { min-height: 48px; width: 100%; background: #101a24; border: 1px solid #344957; border-radius: 10px; padding: 8px; color: #edf5f7; font-size: 16px; }
+  .lv-mobile-sheet-controls .lv-console-session { margin-top: 10px; padding-top: 0; border: 0; }
+  :is(.lv-mobile-navigation, .lv-workspace-signin) :is(button, a, input, select):focus-visible { outline: 2px solid #76efd6; outline-offset: 2px; }
+}

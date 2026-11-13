@@ -15,6 +15,7 @@ import AgencyAccountIssuer from '../components/AgencyAccountIssuer';
 import CameraControlCenter from '../components/CameraControlCenter';
 import IntelligenceDashboard from '../components/IntelligenceDashboard';
 import { Layout, type WorkspaceNavigationGroup } from '../components/Layout';
+import MobileWorkspaceNav from '../components/MobileWorkspaceNav';
 import { UserRole } from '../types';
 import WorkspaceObservations from '../components/WorkspaceObservations';
 import VideoAnalysis from '../components/VideoAnalysis';
@@ -42,8 +43,10 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  LockKeyhole,
   LogOut,
   Map,
+  Mail,
   PlayCircle,
   ScanFace,
   Search,
@@ -566,9 +569,12 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
 
   if (!account)
     return (
-      <main className="lv-access">
-        <section className="lv-card">
-          <img src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="220" />
+      <main className="lv-access lv-workspace-signin" data-portal={kind}>
+        <section className="lv-card lv-signin-panel">
+          <img className="lv-signin-logo" src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="220" />
+          <div className="lv-mobile-signin-heading">
+            <img src="/logo/lunar-orbit.png" alt="" width="64" height="64" />
+          </div>
           <h1>
             {requestReset
               ? 'Reset your password'
@@ -607,18 +613,24 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
             >
               <label>
                 Email
-                <input type="email" name="email" autoComplete="email" required />
+                <span className="lv-signin-field">
+                  <Mail size={19} aria-hidden="true" />
+                  <input type="email" name="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required />
+                </span>
               </label>
               {!requestReset && (
                 <label>
                   Password
-                  <input
-                    type="password"
-                    name="password"
-                    minLength={register ? 12 : undefined}
-                    autoComplete={register ? 'new-password' : 'current-password'}
-                    required
-                  />
+                  <span className="lv-signin-field">
+                    <LockKeyhole size={19} aria-hidden="true" />
+                    <input
+                      type="password"
+                      name="password"
+                      minLength={register ? 12 : undefined}
+                      autoComplete={register ? 'new-password' : 'current-password'}
+                      required
+                    />
+                  </span>
                 </label>
               )}
               <button disabled={busy}>{requestReset ? 'Send reset link' : register ? 'Create account' : 'Sign in'}</button>
@@ -730,6 +742,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
 
   const section = visiblePanels.find(([id]) => id === panel)?.[1] ?? 'Overview';
   const restoredAgency = agency && !platformView;
+  const consoleHasNavigation = (workspace && !platformView) || (platformView && loadedFor === account && admin);
   const filteredAgencies = workspaces.filter(
     (item) =>
       (agencyStatusFilter === 'all' || (agencyStatusFilter === 'active' ? item.active : !item.active)) &&
@@ -839,6 +852,39 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
     },
   ];
 
+  const consoleWorkspaceSwitcher = workspace && (
+    <label className="lv-console-switch">
+      <Building2 size={17} aria-hidden="true" />
+      <span>Workspace</span>
+      <select disabled={busy} value={selected} onChange={event => {
+        setSelected(event.target.value);
+        setPanel('overview');
+        setRequestedCamera(undefined);
+        setRequestedEventId(null);
+      }}>
+        {(platformView && platformOrgs.length > 0
+          ? platformOrgs
+          : workspaces.filter(item => platformView || memberships.some(member => member.workspace_id === item.id))
+        ).map(item => <option key={item.id} value={item.id}>{item.name} ({item.kind})</option>)}
+      </select>
+    </label>
+  );
+
+  const consoleSession = (
+    <div className="lv-console-session">
+      {loadedFor === account && agency && admin && (
+        <a href={platformView ? '/agency' : '/agency/admin'}>
+          {platformView ? 'Agency workspace' : 'Platform administration'}
+        </a>
+      )}
+      <button type="button" onClick={() =>
+        void supabase.auth.signOut().then(({ error }) => { if (error) setNotice(error.message); })
+      }>
+        <LogOut size={16} aria-hidden="true" /> Sign out
+      </button>
+    </div>
+  );
+
   const content = (
     <div className={restoredAgency ? 'lv-restored-agency' : 'lv-console'}>
       {!restoredAgency && (
@@ -848,32 +894,8 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
               <img src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="148" />
               <span>{platformView ? 'Platform administration' : agency ? 'Agency operations' : 'Business operations'}</span>
             </div>
-            {workspace && (
-              <label className="lv-console-switch">
-                <Building2 size={17} aria-hidden="true" />
-                <span>Workspace</span>
-                <select
-                  disabled={busy}
-                  value={selected}
-                  onChange={(event) => {
-                    setSelected(event.target.value);
-                    setPanel('overview');
-                    setRequestedCamera(undefined);
-                    setRequestedEventId(null);
-                  }}
-                >
-                  {(platformView && platformOrgs.length > 0
-                    ? platformOrgs
-                    : workspaces.filter((item) => platformView || memberships.some((member) => member.workspace_id === item.id))
-                  ).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.kind})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {((workspace && !platformView) || (platformView && loadedFor === account && admin)) && (
+            {consoleWorkspaceSwitcher}
+            {consoleHasNavigation && (
               <nav aria-label="Workspace navigation">
                 {visiblePanels.map(([id, label]) => {
                   const Icon = panelIcons[id as keyof typeof panelIcons] || LayoutDashboard;
@@ -891,24 +913,12 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                 })}
               </nav>
             )}
-            <div className="lv-console-session">
-              {loadedFor === account && agency && admin && (
-                <a href={platformView ? '/agency' : '/agency/admin'}>
-                  {platformView ? 'Agency workspace' : 'Platform administration'}
-                </a>
-              )}
-              <button
-                type="button"
-                onClick={() =>
-                  void supabase.auth.signOut().then(({ error }) => {
-                    if (error) setNotice(error.message);
-                  })
-                }
-              >
-                <LogOut size={16} aria-hidden="true" /> Sign out
-              </button>
-            </div>
+            {consoleSession}
           </aside>
+          <header className="lv-mobile-topbar">
+            <img src="/logo/lunar-vision-white.png" alt="Lunar Vision" width="142" />
+            <span>{platformView ? 'Admin' : 'Business'}</span>
+          </header>
         </>
       )}
       <main className="lv-portal lv-console-main">
@@ -1706,6 +1716,22 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
           />
         )}
       </main>
+      {!restoredAgency && (
+        <MobileWorkspaceNav
+          workspace={workspace?.name ?? (platformView ? 'Platform administration' : 'Business workspace')}
+          active={panel}
+          tabs={platformView ? [{ id: 'overview', label: 'Agencies' }, { id: 'issue', label: 'Accounts' }] : [
+            { id: 'overview', label: 'Home' }, { id: 'cameras', label: 'Cameras' },
+            { id: 'alerts', label: 'Alerts' }, { id: 'records', label: 'Activity' },
+          ]}
+          groups={consoleHasNavigation ? [{
+            label: platformView ? 'Administration' : 'Workspace',
+            items: visiblePanels.map(([id, label]) => ({ id, label, icon: panelIcons[id as keyof typeof panelIcons] ?? LayoutDashboard })),
+          }] : []}
+          onNavigate={navigate}
+          controls={<>{consoleWorkspaceSwitcher}{consoleSession}{!agency && <a href="/">Return to website</a>}</>}
+        />
+      )}
     </div>
   );
   if (!restoredAgency) return content;
@@ -1721,7 +1747,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
       }
       scopedWorkspace={{
         name: workspace?.name ?? 'Agency workspace',
-      groups: isMember ? shellGroups.map(group=>({...group,items:group.items.filter(item=>canOpenPanel(item.id))})).filter(group=>group.items.length) : [],
+        groups: isMember ? shellGroups.map(group=>({...group,items:group.items.filter(item=>canOpenPanel(item.id))})).filter(group=>group.items.length) : [],
         controls: (
           <>
             {workspace && (
