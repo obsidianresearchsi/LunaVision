@@ -3,10 +3,13 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import VideoAnalysis from './VideoAnalysis';
 
-const { detect, recognize, rpc } = vi.hoisted(() => ({
+const { detect, recognize, rpc, loadModel, getBackend, setBackend } = vi.hoisted(() => ({
   detect: vi.fn(),
   recognize: vi.fn(),
   rpc: vi.fn(),
+  loadModel: vi.fn(),
+  getBackend: vi.fn(),
+  setBackend: vi.fn(),
 }));
 
 vi.mock('./CameraStream', () => ({
@@ -16,8 +19,8 @@ vi.mock('./VehicleWatchlist', () => ({ PlateWatchlistCheck: () => null }));
 vi.mock('../services/supabase', () => ({
   supabase: { rpc, auth: { getSession: async () => ({ data: { session: { access_token: 'test-token' } } }) } },
 }));
-vi.mock('@tensorflow/tfjs', () => ({ ready: async () => {}, getBackend: () => 'cpu' }));
-vi.mock('@tensorflow-models/coco-ssd', () => ({ load: async () => ({ detect }) }));
+vi.mock('@tensorflow/tfjs', () => ({ ready: async () => {}, getBackend, setBackend }));
+vi.mock('@tensorflow-models/coco-ssd', () => ({ load: loadModel }));
 vi.mock('tesseract.js', () => ({
   PSM: { SINGLE_LINE: '7' },
   createWorker: async () => ({ recognize, setParameters: async () => {}, terminate: async () => {} }),
@@ -31,6 +34,9 @@ describe('Phone camera analysis', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.clearAllMocks();
+    loadModel.mockResolvedValue({ detect });
+    getBackend.mockReturnValue('cpu');
+    setBackend.mockResolvedValue(true);
     originalDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
     host = document.createElement('div');
     document.body.append(host);
@@ -53,6 +59,34 @@ describe('Phone camera analysis', () => {
     expect(button, label).toBeDefined();
     await act(async () => button!.click());
   }
+
+  it('starts Android WebView in CPU mode and lets the user retry a failed model load', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; Pixel; wv)');
+    getBackend.mockReturnValue('webgl');
+    setBackend.mockImplementation(async () => {
+      getBackend.mockReturnValue('cpu');
+      return true;
+    });
+    loadModel.mockRejectedValueOnce(new Error('network interrupted'));
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+    });
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      (() => ({ drawImage: vi.fn() })) as unknown as typeof HTMLCanvasElement.prototype.getContext,
+    );
+
+    await act(async () => root.render(<VideoAnalysis workspaceId="agency" />));
+    await click('Phone camera');
+    await act(async () => vi.waitFor(() => expect(loadModel).toHaveBeenCalledOnce()));
+    expect(setBackend).toHaveBeenCalledWith('cpu');
+    expect(host.textContent).toContain('The object detection model could not load or initialize.');
+    await click('Retry object detection');
+    expect(loadModel).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain('Stop object detection');
+  });
 
   it.each([false, true])('analyzes phone frames at a fixed timestamp with face access=%s', async allowPhoneFaceSearch => {
     vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');

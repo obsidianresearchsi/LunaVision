@@ -52,18 +52,42 @@ function selection(start: Point, end: Point): Box {
   };
 }
 
-async function loadDetector() {
-  const tf = await import('@tensorflow/tfjs');
-  await tf.ready();
-  const { load } = await import('@tensorflow-models/coco-ssd');
-  const options = { base: 'lite_mobilenet_v2', modelUrl: '/models/coco-ssd-lite/model.json' } as const;
+class DetectorStartupError extends Error {
+  constructor(readonly stage: 'module' | 'model', cause: unknown) {
+    super('Object detector startup failed', { cause });
+  }
+}
+
+async function loadDetector(preferCpu: boolean) {
+  const [tf, { load }] = await Promise.all([
+    import('@tensorflow/tfjs'),
+    import('@tensorflow-models/coco-ssd'),
+  ]).catch(error => { throw new DetectorStartupError('module', error); });
+  const options = {
+    base: 'lite_mobilenet_v2',
+    modelUrl: new URL('/models/coco-ssd-lite/model.json', location.origin).href,
+  } as const;
+
+  async function useCpu() {
+    if (tf.getBackend() !== 'cpu' && !await tf.setBackend('cpu')) {
+      throw new Error('CPU detection backend is unavailable');
+    }
+    await tf.ready();
+  }
+
   let model;
   try {
+    if (preferCpu) await useCpu();
+    else await tf.ready();
     model = await load(options);
   } catch (error) {
-    if (tf.getBackend() === 'cpu') throw error;
-    await tf.setBackend('cpu');
-    model = await load(options);
+    if (preferCpu || tf.getBackend() === 'cpu') throw new DetectorStartupError('model', error);
+    try {
+      await useCpu();
+      model = await load(options);
+    } catch (fallbackError) {
+      throw new DetectorStartupError('model', fallbackError);
+    }
   }
   return async (frame: HTMLCanvasElement) => {
     try {
@@ -71,7 +95,7 @@ async function loadDetector() {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'SecurityError') throw error;
       if (tf.getBackend() === 'cpu') throw error;
-      await tf.setBackend('cpu');
+      await useCpu();
       return model.detect(frame, 20, 0.42);
     }
   };
@@ -159,6 +183,8 @@ function VideoViewer({
   const [phonePlaying, setPhonePlaying] = useState(false);
   const [phoneFrameAnalyzed, setPhoneFrameAnalyzed] = useState(false);
   const [detecting, setDetecting] = useState(!samplePlate);
+  const [retryDetectionOnCpu, setRetryDetectionOnCpu] = useState(false);
+  const [detectorStartupFailed, setDetectorStartupFailed] = useState(false);
   const [detections, setDetections] = useState<DetectedObject[]>([]);
   const [intelSummary, setIntelSummary] = useState<FrameIntelligenceSummary | null>(null);
   const [frameSeconds, setFrameSeconds] = useState(0);
@@ -550,20 +576,26 @@ function VideoViewer({
     frame.height = size.height;
     const context = frame.getContext('2d');
 
-    setStatus('Loading object detection…');
+    setDetectorStartupFailed(false);
+    const embeddedAndroid = Boolean(phoneStream && /\bAndroid\b.*\bwv\b/i.test(navigator.userAgent));
+    const preferCpu = retryDetectionOnCpu || embeddedAndroid;
+    setStatus(preferCpu ? 'Loading object detection in compatibility mode…' : 'Loading object detection…');
     setPhoneFrameAnalyzed(false);
     async function analyze() {
       let runDetection;
       try {
-        detector ??= loadDetector().catch((error) => {
+        detector ??= loadDetector(preferCpu).catch((error) => {
           detector = undefined;
           throw error;
         });
         runDetection = await detector;
-      } catch {
+      } catch (error) {
         if (cancelled) return;
+        setDetectorStartupFailed(true);
         setDetecting(false);
-        setStatus('The object detection model could not start. Reload this page to get the latest app files, then retry.');
+        setStatus(error instanceof DetectorStartupError && error.stage === 'module'
+          ? 'The detection software did not load. Retry detection or refresh LunaVision.'
+          : 'The object detection model could not load or initialize. Retry detection after checking your connection.');
         return;
       }
       try {
@@ -729,7 +761,7 @@ function VideoViewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [detecting, frozen, size, autoAnpr, autoFaceScan, phoneStream, phonePlateOcr, canSearchPhoneFaces, phoneFaceWorkspaceId, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
+  }, [detecting, frozen, size, autoAnpr, autoFaceScan, phoneStream, phonePlateOcr, canSearchPhoneFaces, phoneFaceWorkspaceId, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip, retryDetectionOnCpu]);
 
   async function runBackgroundPlateOcr(sourceCanvas: HTMLCanvasElement, region: Box, vehicleClass: string, isCurrent: () => boolean) {
     plateOcrInFlight.current = true;
@@ -1310,14 +1342,15 @@ function VideoViewer({
               )}
               <button
                 type="button"
-                disabled={!ready}
+                disabled={!ready && !detectorStartupFailed}
                 onClick={() => {
                   setDetections([]);
-                  setStatus(detecting ? '' : 'Loading object detection…');
+                  if (detectorStartupFailed) setRetryDetectionOnCpu(true);
+                  if (detecting) setStatus('');
                   setDetecting(!detecting);
                 }}
               >
-                {detecting ? 'Stop object detection' : 'Start object detection'}
+                {detecting ? 'Stop object detection' : detectorStartupFailed ? 'Retry object detection' : 'Start object detection'}
               </button>
               {(!phoneStream || phonePlateOcr) && (
                 <button type="button" disabled={!ready} onClick={freezeFrame}>Freeze frame for plate OCR</button>
