@@ -698,6 +698,9 @@ export default function FaceComparison({
                   {cameraError}
                 </p>
               )}
+              {capturedProbeFile && (
+                <p className="lv-notice" role="status">Photo attached. Tap Search with this photo to search agency records.</p>
+              )}
               <div className="lv-form-grid">
                 <label>
                   Case / Incident Reference (optional)
@@ -708,7 +711,9 @@ export default function FaceComparison({
                   <input name="notes" maxLength={300} placeholder="e.g. Gate 3 perimeter still" disabled={busy} />
                 </label>
               </div>
-              <button disabled={busy}>{busy ? 'Searching agency FaceSet…' : 'Search enrolled subject database'}</button>
+              <button type="submit" disabled={busy}>
+                {busy ? 'Searching agency records…' : capturedProbeFile ? 'Search with this photo' : 'Search enrolled subject database'}
+              </button>
             </form>
 
             <aside
@@ -850,7 +855,7 @@ export default function FaceComparison({
                     textAlign: 'center',
                   }}
                 >
-                  Select an image file or click Use Phone / Device Camera to capture and preview a suspect photo here.
+                  Choose an image or tap Take photo to preview it here.
                 </button>
               )}
             </aside>
@@ -1003,6 +1008,9 @@ export default function FaceComparison({
                   onChange={(e) => handleAdhocCandSelect(e.target.files)}
                 />
               </label>
+              {capturedAdhocRefFile && (
+                <p className="lv-notice" role="status">Reference photo attached. Add {gallery ? 'up to six gallery photos' : 'a second photo'} to compare.</p>
+              )}
               <button disabled={busy}>
                 {busy ? 'Comparing photos…' : gallery ? 'Search gallery' : 'Compare photos'}
               </button>

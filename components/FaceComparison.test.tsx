@@ -354,7 +354,9 @@ describe('FaceComparison component', () => {
 
   it.each([true, false])('accepts a phone photo without the live camera API (face search=%s)', async gallery => {
     vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
-    const fetchSpy = vi.fn();
+    const fetchSpy = vi.fn().mockResolvedValue(Response.json({
+      mode: 'faceset_1n', matches: [], score: 85, threshold: 75,
+    }));
     globalThis.fetch = fetchSpy;
     await act(async () => root.render(<FaceComparison workspaceId="ws-ag-1" gallery={gallery} />));
 
@@ -371,6 +373,26 @@ describe('FaceComparison component', () => {
     const upload = host.querySelector<HTMLInputElement>(gallery ? 'input[name="probe"]' : 'input[name="reference"]')!;
     expect(upload.required).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
+
+    if (!gallery) {
+      const candidate = host.querySelector<HTMLInputElement>('input[name="candidate"]')!;
+      const secondPhoto = new File(['comparison photo'], 'comparison.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(candidate, 'files', { value: [secondPhoto] });
+    }
+    const submit = Array.from(host.querySelectorAll<HTMLButtonElement>('form button')).find(button =>
+      button.textContent?.trim() === (gallery ? 'Search with this photo' : 'Compare photos'),
+    )!;
+    await act(async () => {
+      if (gallery) submit.click();
+      // jsdom does not update native file-input validity for a mocked FileList.
+      else submit.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(fetchSpy).toHaveBeenCalled();
+    const [endpoint, request] = fetchSpy.mock.calls[0];
+    expect(endpoint).toBe(gallery ? '/api/face-intelligence' : '/api/face-compare');
+    const attachedPhoto = request.body.get(gallery ? 'photo' : 'reference') as File;
+    expect(attachedPhoto.name).toBe(file.name);
+    expect(attachedPhoto.size).toBe(file.size);
   });
 });
 
