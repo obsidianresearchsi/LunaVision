@@ -50,7 +50,7 @@ describe('Phone camera analysis', () => {
     await act(async () => button!.click());
   }
 
-  it('analyzes a live phone frame locally and releases the camera when stopped', async () => {
+  it('keeps detecting live phone frames when the video timestamp is fixed', async () => {
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });
     const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const getUserMedia = vi.fn().mockResolvedValue(stream);
@@ -76,9 +76,11 @@ describe('Phone camera analysis', () => {
     const video = host.querySelector('video')!;
     expect(video.srcObject).toBe(stream);
     Object.defineProperties(video, {
-      readyState: { value: 2 }, videoWidth: { value: 1280 }, videoHeight: { value: 720 },
+      readyState: { value: 2 }, paused: { value: false },
+      videoWidth: { value: 1280 }, videoHeight: { value: 720 }, currentTime: { value: 0 },
     });
-    await act(async () => vi.waitFor(() => expect(recognize).toHaveBeenCalled()));
+    await act(async () => vi.waitFor(() => expect(detect.mock.calls.length).toBeGreaterThanOrEqual(2)));
+    expect(host.textContent).toContain('Live object detection is active.');
     expect(host.textContent).toContain('ABC123DE');
     expect(detect).toHaveBeenCalled();
     expect(recognize).toHaveBeenCalled();

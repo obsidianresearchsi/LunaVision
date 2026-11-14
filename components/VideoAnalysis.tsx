@@ -154,6 +154,8 @@ function VideoViewer({
 
   const [size, setSize] = useState({ width: 640, height: 360 });
   const [ready, setReady] = useState(false);
+  const [phonePlaying, setPhonePlaying] = useState(false);
+  const [phoneFrameAnalyzed, setPhoneFrameAnalyzed] = useState(false);
   const [detecting, setDetecting] = useState(!samplePlate);
   const [detections, setDetections] = useState<DetectedObject[]>([]);
   const [intelSummary, setIntelSummary] = useState<FrameIntelligenceSummary | null>(null);
@@ -211,13 +213,20 @@ function VideoViewer({
     const media = video.current;
     if (!media || !phoneStream) return;
     media.srcObject = phoneStream;
-    void media.play().catch(() => {
-      if (media.srcObject === phoneStream) setStatus('Tap Play to resume the phone camera preview.');
-    });
+    void playPhonePreview(media, phoneStream);
     return () => {
       if (media.srcObject === phoneStream) media.srcObject = null;
     };
   }, [phoneStream]);
+
+  async function playPhonePreview(media: HTMLVideoElement, stream: MediaStream) {
+    try {
+      await media.play();
+      if (media.srcObject === stream) setPhonePlaying(true);
+    } catch {
+      if (media.srcObject === stream) setPhonePlaying(false);
+    }
+  }
 
   useEffect(() => {
     setAutoAnpr(phonePlateOcr || Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
@@ -463,6 +472,7 @@ function VideoViewer({
     const context = frame.getContext('2d');
 
     setStatus('Loading object detection…');
+    setPhoneFrameAnalyzed(false);
     async function analyze() {
       let runDetection;
       try {
@@ -479,9 +489,15 @@ function VideoViewer({
       }
       try {
         if (cancelled) return;
+        if (!context) throw new Error('Video frame capture is unavailable');
         const media = video.current;
         let delay = 200;
-        if (media && !document.hidden && media.readyState >= 2 && !media.seeking && media.currentTime !== lastTime && context) {
+        // Some embedded browsers keep currentTime fixed for MediaStream playback.
+        // Sample playing phone video at the detector's pace without that file timestamp check.
+        const hasFrame = media && (phoneStream
+          ? !media.paused && media.videoWidth > 0 && media.videoHeight > 0
+          : media.currentTime !== lastTime);
+        if (media && hasFrame && !document.hidden && media.readyState >= 2 && !media.seeking) {
           const started = performance.now();
           lastTime = media.currentTime;
           context.drawImage(media, 0, 0, frame.width, frame.height);
@@ -513,6 +529,10 @@ function VideoViewer({
           });
 
           setDetections(objects);
+          if (phoneStream) {
+            setReady(true);
+            setPhoneFrameAnalyzed(true);
+          }
           setIntelSummary(summary);
           setFrameSeconds(lastTime);
           setStatus(
@@ -610,7 +630,9 @@ function VideoViewer({
         setStatus(
           error instanceof DOMException && error.name === 'SecurityError'
             ? 'This camera does not allow frame access. Enable cross-origin video access or choose a local file.'
-            : 'Object detection could not process this frame. Try a different frame or local video.',
+            : phoneStream
+              ? 'Object detection could not read the phone preview. Restart the phone camera or try Chrome.'
+              : 'Object detection could not process this frame. Try a different frame or local video.',
         );
       }
     }
@@ -998,6 +1020,7 @@ function VideoViewer({
             onStreamError={() => { setReady(false); setDetecting(false); setStatus('Camera playback failed. Check the gateway, stream format and CORS settings.'); }}
             crossOrigin="anonymous"
             src={src}
+            aria-label={phoneStream ? 'Phone camera preview' : undefined}
             controls={!frozen}
             muted={Boolean(phoneStream)}
             controlsList="nofullscreen noremoteplayback"
@@ -1014,6 +1037,13 @@ function VideoViewer({
               });
             }}
             onLoadedData={() => setReady(true)}
+            onPlaying={() => {
+              if (phoneStream) {
+                setReady(true);
+                setPhonePlaying(true);
+              }
+            }}
+            onPause={() => { if (phoneStream) setPhonePlaying(false); }}
             onError={() => {
               setReady(false);
               setDetecting(false);
@@ -1172,7 +1202,7 @@ function VideoViewer({
                   setFrozen(false);
                   setPlate(null);
                   setStatus('');
-                  if (phoneStream) void video.current?.play().catch(() => {});
+                  if (phoneStream && video.current) void playPhonePreview(video.current, phoneStream);
                 }}
               >
                 Back to video
@@ -1185,6 +1215,11 @@ function VideoViewer({
         ) : (
           !samplePlate && (
             <>
+              {phoneStream && !phonePlaying && (
+                <button type="button" onClick={() => {
+                  if (video.current) void playPhonePreview(video.current, phoneStream);
+                }}>Play phone preview</button>
+              )}
               <button
                 type="button"
                 disabled={!ready}
@@ -1282,6 +1317,11 @@ function VideoViewer({
       {observationNotice && <p role="status">{observationNotice}</p>}
       {phoneOcrError && <p role="status">{phoneOcrError}</p>}
       {faceScanStatus && <p role="status" style={{ fontWeight: 700, color: '#fcd34d' }}>{faceScanStatus}</p>}
+      {phoneStream && detecting && !frozen && (
+        <p role="status">{!phonePlaying
+          ? 'Waiting for the phone preview to play.'
+          : phoneFrameAnalyzed ? 'Live object detection is active.' : 'Waiting for the first camera frame to be analyzed.'}</p>
+      )}
       {status && <p role="status" style={{ fontWeight: status.startsWith('WEAPON ALERT') ? 800 : undefined, color: status.startsWith('WEAPON ALERT') ? '#ff8b89' : undefined }}>{status}</p>}
       {plate && (
         <p role="status">
