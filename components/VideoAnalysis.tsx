@@ -30,6 +30,18 @@ const detectionFrameLimit = 320;
 type Point = { x: number; y: number };
 type Box = Point & { width: number; height: number };
 const samplePlateRegion: Box = { x: 0.13, y: 0.33, width: 0.73, height: 0.47 };
+const phoneSettings = defaultCameraIntelSettings(false);
+phoneSettings.capabilities.tamper.enabled = false;
+phoneSettings.capabilities.weapon_detection.enabled = false;
+
+function phoneCameraError(error: unknown) {
+  const name = error instanceof Error ? error.name : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Live camera permission was blocked. Allow Camera in Android app settings, or open LunaVision in Chrome.';
+  }
+  if (name === 'NotFoundError') return 'No camera was found on this device.';
+  return 'The camera could not start. Close other apps using it and try again.';
+}
 
 function selection(start: Point, end: Point): Box {
   return {
@@ -113,6 +125,8 @@ async function uploadEventSnapshot(workspaceId: string, canvas: HTMLCanvasElemen
 
 function VideoViewer({
   src,
+  phoneStream,
+  phonePlateOcr = false,
   samplePlate,
   isSampleClip,
   watchlistWorkspaceId,
@@ -120,7 +134,9 @@ function VideoViewer({
   intelSettings,
   onInspectEvent,
 }: {
-  src: string;
+  src?: string;
+  phoneStream?: MediaStream;
+  phonePlateOcr?: boolean;
   samplePlate: boolean;
   isSampleClip: boolean;
   watchlistWorkspaceId?: string;
@@ -144,16 +160,17 @@ function VideoViewer({
   const [frameSeconds, setFrameSeconds] = useState(0);
   const [savingObservation, setSavingObservation] = useState(false);
   const [autoSave, setAutoSave] = useState(true);
-  const [autoAnpr, setAutoAnpr] = useState(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
+  const [autoAnpr, setAutoAnpr] = useState(phonePlateOcr || Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
   const [autoFaceScan, setAutoFaceScan] = useState(Boolean(observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true'));
   const saveLock = useRef(false);
   const saveAction = useRef<() => void>(() => {});
   const lastAutoSave = useRef(0);
   const lastAutoAnprMs = useRef(0);
+  const plateOcrInFlight = useRef(false);
   const lastFaceScanMs = useRef(0);
   const faceScanInFlight = useRef(false);
   const agencyRulesRef = useRef<AgencyRuleRecord[]>([]);
-  const plateConsensusRef = useRef<PlateConsensusBuffer>(new PlateConsensusBuffer(5000));
+  const plateConsensusRef = useRef(new PlateConsensusBuffer(phoneStream ? 12000 : 5000));
   const lastRecordedPlateRef = useRef<{ plate: string; ms: number }>({ plate: '', ms: 0 });
   const [recentPlates, setRecentPlates] = useState<{ plate: string; confidence: number; ts: string; matched?: boolean }[]>([]);
   const [faceMatches, setFaceMatches] = useState<FaceMatchBanner[]>([]);
@@ -176,6 +193,7 @@ function VideoViewer({
   const [crop, setCrop] = useState<Box | null>(null);
   const [reading, setReading] = useState(false);
   const [plate, setPlate] = useState<{ text: string; confidence: number } | null>(null);
+  const [phoneOcrError, setPhoneOcrError] = useState('');
   const [watchlistMatches, setWatchlistMatches] = useState<WatchlistMatchAlert[]>([]);
   const [eventsIngestedCount, setEventsIngestedCount] = useState(0);
 
@@ -187,12 +205,24 @@ function VideoViewer({
     return () => {
       mounted.current = false;
     };
-  }, [src]);
+  }, [src, phoneStream]);
 
   useEffect(() => {
-    setAutoAnpr(Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
+    const media = video.current;
+    if (!media || !phoneStream) return;
+    media.srcObject = phoneStream;
+    void media.play().catch(() => {
+      if (media.srcObject === phoneStream) setStatus('Tap Play to resume the phone camera preview.');
+    });
+    return () => {
+      if (media.srcObject === phoneStream) media.srcObject = null;
+    };
+  }, [phoneStream]);
+
+  useEffect(() => {
+    setAutoAnpr(phonePlateOcr || Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
     setAutoFaceScan(Boolean(observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true'));
-  }, [watchlistWorkspaceId, observation?.workspaceId, intelSettings.capabilities.anpr?.enabled]);
+  }, [phonePlateOcr, watchlistWorkspaceId, observation?.workspaceId, intelSettings.capabilities.anpr?.enabled]);
 
   useEffect(() => {
     if (!observation?.workspaceId) {
@@ -451,7 +481,7 @@ function VideoViewer({
         if (cancelled) return;
         const media = video.current;
         let delay = 200;
-        if (media && media.readyState >= 2 && !media.seeking && media.currentTime !== lastTime && context) {
+        if (media && !document.hidden && media.readyState >= 2 && !media.seeking && media.currentTime !== lastTime && context) {
           const started = performance.now();
           lastTime = media.currentTime;
           context.drawImage(media, 0, 0, frame.width, frame.height);
@@ -548,9 +578,9 @@ function VideoViewer({
           // Background Automatic ANPR on detected vehicles when enabled
           if (
             autoAnpr &&
-            watchlistWorkspaceId &&
-            currentSettings.capabilities.anpr?.enabled &&
-            nowMs - lastAutoAnprMs.current >= 5000
+            (phonePlateOcr || (watchlistWorkspaceId && currentSettings.capabilities.anpr?.enabled)) &&
+            !plateOcrInFlight.current &&
+            nowMs - lastAutoAnprMs.current >= (phoneStream ? 2500 : 5000)
           ) {
             const vehicleObj = objects.find(
               (o) => VEHICLE_CLASSES.has(o.class.toLowerCase()) && o.bbox[2] >= 48 && o.bbox[3] >= 28,
@@ -566,7 +596,7 @@ function VideoViewer({
                 width: Math.min(1, vw / frame.width),
                 height: Math.min(1, (vh * 0.65) / frame.height),
               };
-              void runBackgroundPlateOcr(hiCanvas, region, vehicleObj.class.toLowerCase());
+              void runBackgroundPlateOcr(hiCanvas, region, vehicleObj.class.toLowerCase(), () => !cancelled);
             }
           }
 
@@ -590,9 +620,10 @@ function VideoViewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [detecting, frozen, size, autoAnpr, autoFaceScan, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
+  }, [detecting, frozen, size, autoAnpr, autoFaceScan, phoneStream, phonePlateOcr, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
 
-  async function runBackgroundPlateOcr(sourceCanvas: HTMLCanvasElement, region: Box, vehicleClass: string) {
+  async function runBackgroundPlateOcr(sourceCanvas: HTMLCanvasElement, region: Box, vehicleClass: string, isCurrent: () => boolean) {
+    plateOcrInFlight.current = true;
     try {
       const width = Math.round(region.width * sourceCanvas.width);
       const height = Math.round(region.height * sourceCanvas.height);
@@ -614,7 +645,8 @@ function VideoViewer({
           tessedit_pageseg_mode: PSM.SINGLE_LINE,
         });
         const { data } = await worker.recognize(image);
-        if (!mounted.current) return;
+        if (!mounted.current || !isCurrent()) return;
+        if (phonePlateOcr) setPhoneOcrError('');
         const consensus = plateConsensusRef.current.push(data.text, data.confidence);
         if (consensus.confirmed) {
           setPlate({ text: consensus.confirmed, confidence: consensus.bestConfidence });
@@ -628,7 +660,11 @@ function VideoViewer({
         await worker.terminate();
       }
     } catch {
-      // Ignore transient background OCR errors
+      if (phonePlateOcr && mounted.current && isCurrent()) {
+        setPhoneOcrError('Live plate reading failed. Try a sharper view or freeze a frame and select the plate.');
+      }
+    } finally {
+      plateOcrInFlight.current = false;
     }
   }
 
@@ -797,13 +833,13 @@ function VideoViewer({
               {intelSummary.vehicleByType.bus || 0} bus · {intelSummary.vehicleByType.truck || 0} truck
             </small>
           </div>
-          <div className="lv-stat-card" style={{ padding: '0.6rem 0.8rem', borderColor: intelSummary.weaponsCurrent > 0 ? '#ef4444' : undefined }}>
+          {!phoneStream && <div className="lv-stat-card" style={{ padding: '0.6rem 0.8rem', borderColor: intelSummary.weaponsCurrent > 0 ? '#ef4444' : undefined }}>
             <span>Weapons / Threats</span>
             <strong style={{ fontSize: '1.15rem', fontWeight: 800, color: intelSummary.weaponsCurrent > 0 ? '#ef4444' : '#76efd6' }}>
               {intelSummary.weaponsCurrent > 0 ? `${intelSummary.weaponsCurrent} WEAPON` : 'Clear (Armed ON)'}
             </strong>
             <small>Face matches: {faceMatches.length}</small>
-          </div>
+          </div>}
           <div className="lv-stat-card" style={{ padding: '0.6rem 0.8rem' }}>
             <span>Analytics status</span>
             <strong style={{ fontSize: '0.95rem', color: intelSummary.tampered ? '#ef4444' : undefined }}>
@@ -963,6 +999,7 @@ function VideoViewer({
             crossOrigin="anonymous"
             src={src}
             controls={!frozen}
+            muted={Boolean(phoneStream)}
             controlsList="nofullscreen noremoteplayback"
             disablePictureInPicture
             playsInline
@@ -1135,6 +1172,7 @@ function VideoViewer({
                   setFrozen(false);
                   setPlate(null);
                   setStatus('');
+                  if (phoneStream) void video.current?.play().catch(() => {});
                 }}
               >
                 Back to video
@@ -1158,9 +1196,9 @@ function VideoViewer({
               >
                 {detecting ? 'Stop object detection' : 'Start object detection'}
               </button>
-              <button type="button" disabled={!ready} onClick={freezeFrame}>
-                Freeze frame for plate OCR
-              </button>
+              {(!phoneStream || phonePlateOcr) && (
+                <button type="button" disabled={!ready} onClick={freezeFrame}>Freeze frame for plate OCR</button>
+              )}
               {observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true' && (
                 <button
                   type="button"
@@ -1180,14 +1218,17 @@ function VideoViewer({
                   Scan faces in frame
                 </button>
               )}
-              {watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled && (
+              {(phonePlateOcr || (watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled)) && (
                 <label className="lv-inline-check" style={{ marginLeft: '0.5rem' }}>
                   <input
                     type="checkbox"
                     checked={autoAnpr}
-                    onChange={(e) => setAutoAnpr(e.target.checked)}
+                    onChange={(e) => {
+                      setAutoAnpr(e.target.checked);
+                      setPhoneOcrError('');
+                    }}
                   />
-                  <span>Real-time background ANPR matching</span>
+                  <span>{phoneStream ? 'Read license plates live' : 'Real-time background ANPR matching'}</span>
                 </label>
               )}
               {observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true' && (
@@ -1239,6 +1280,7 @@ function VideoViewer({
         </>
       )}
       {observationNotice && <p role="status">{observationNotice}</p>}
+      {phoneOcrError && <p role="status">{phoneOcrError}</p>}
       {faceScanStatus && <p role="status" style={{ fontWeight: 700, color: '#fcd34d' }}>{faceScanStatus}</p>}
       {status && <p role="status" style={{ fontWeight: status.startsWith('WEAPON ALERT') ? 800 : undefined, color: status.startsWith('WEAPON ALERT') ? '#ff8b89' : undefined }}>{status}</p>}
       {plate && (
@@ -1290,12 +1332,74 @@ export default function VideoAnalysis({
   onInspectEvent?: (eventId: string) => void;
 }) {
   const [fileUrl, setFileUrl] = useState('');
-  const [source, setSource] = useState<'camera' | 'traffic' | 'plate' | 'file'>(
+  const [source, setSource] = useState<'camera' | 'phone' | 'traffic' | 'plate' | 'file'>(
     cameraUrl ? 'camera' : samples && !workspaceId ? 'traffic' : 'file',
   );
+  const [phoneStream, setPhoneStream] = useState<MediaStream>();
+  const [phoneStarting, setPhoneStarting] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const phoneStreamRef = useRef<MediaStream | undefined>(undefined);
+  const phoneRequest = useRef(0);
   const [intelSettings, setIntelSettings] = useState<CameraIntelSettings>(() =>
     defaultCameraIntelSettings(Boolean(watchlistWorkspaceId)),
   );
+
+  function releasePhoneCamera() {
+    phoneRequest.current += 1;
+    const stream = phoneStreamRef.current;
+    phoneStreamRef.current = undefined;
+    stream?.getTracks().forEach(track => track.stop());
+  }
+
+  function selectSource(next: typeof source) {
+    releasePhoneCamera();
+    setPhoneStream(undefined);
+    setPhoneStarting(false);
+    setPhoneError('');
+    setSource(next);
+  }
+
+  async function startPhoneCamera() {
+    selectSource('phone');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPhoneError('Live camera access is unavailable here. Open LunaVision over HTTPS in Chrome or choose a video.');
+      return;
+    }
+    const request = phoneRequest.current;
+    setPhoneStarting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      if (request !== phoneRequest.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      phoneStreamRef.current = stream;
+      for (const track of stream.getVideoTracks()) {
+        track.addEventListener('ended', () => {
+          if (phoneStreamRef.current !== stream) return;
+          selectSource('phone');
+          setPhoneError('The phone camera disconnected. Start it again to resume analysis.');
+        }, { once: true });
+      }
+      setPhoneStream(stream);
+    } catch (error) {
+      if (request === phoneRequest.current) setPhoneError(phoneCameraError(error));
+    } finally {
+      if (request === phoneRequest.current) setPhoneStarting(false);
+    }
+  }
+
+  useEffect(() => {
+    function onPageHide() { selectSource('file'); }
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      releasePhoneCamera();
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -1331,11 +1435,13 @@ export default function VideoAnalysis({
 
   const sources = {
     camera: cameraUrl,
+    phone: undefined,
     traffic: '/demo/street-traffic.webm',
     plate: '/demo/niger-plate-sample.jpg',
     file: fileUrl,
   };
   const src = sources[source];
+  const isPhone = source === 'phone';
 
   return (
     <section className="lv-video-analysis" aria-label="Video analysis">
@@ -1346,16 +1452,20 @@ export default function VideoAnalysis({
       </p>
       <div className="lv-video-actions">
         {cameraUrl && (
-          <button type="button" aria-pressed={source === 'camera'} onClick={() => setSource('camera')}>
+          <button type="button" aria-pressed={source === 'camera'} onClick={() => selectSource('camera')}>
             Workspace camera
           </button>
         )}
+        {workspaceId && <button type="button" aria-pressed={isPhone}
+          onClick={() => phoneStream || phoneStarting ? selectSource(cameraUrl ? 'camera' : 'file') : void startPhoneCamera()}>
+          {phoneStarting ? 'Cancel camera request' : phoneStream ? 'Stop phone camera' : 'Phone camera'}
+        </button>}
         {samples && (
           <>
-            <button type="button" aria-pressed={source === 'traffic'} onClick={() => setSource('traffic')}>
+            <button type="button" aria-pressed={source === 'traffic'} onClick={() => selectSource('traffic')}>
               Traffic sample
             </button>
-            <button type="button" aria-pressed={source === 'plate'} onClick={() => setSource('plate')}>
+            <button type="button" aria-pressed={source === 'plate'} onClick={() => selectSource('plate')}>
               Plate OCR sample
             </button>
           </>
@@ -1369,13 +1479,16 @@ export default function VideoAnalysis({
               const file = event.currentTarget.files?.[0];
               if (!file) return;
               setFileUrl(URL.createObjectURL(file));
-              setSource('file');
+              selectSource('file');
               event.currentTarget.value = '';
             }}
           />
         </label>
       </div>
-      {!src && <p>Choose a local video{cameraUrl ? ' or switch to the open workspace camera' : ''} to start analysis.</p>}
+      {!src && !isPhone && <p>{workspaceId ? 'Choose a video or start the phone camera to analyze live footage.' : 'Choose a video to start analysis.'}</p>}
+      {isPhone && phoneStarting && <p role="status">Waiting for camera permission…</p>}
+      {isPhone && phoneError && <p role="alert">{phoneError}</p>}
+      {isPhone && phoneStream && <p>Phone analysis runs on this device.{watchlistWorkspaceId && ' Hold the camera steady and bring the plate into clear view.'}</p>}
       {source === 'traffic' && (
         <p>
           Practice footage. Object detection starts automatically. Press play to analyze more frames.{' '}
@@ -1409,16 +1522,18 @@ export default function VideoAnalysis({
           · resized
         </p>
       )}
-      {src && (
+      {(src || (isPhone && phoneStream)) && (
         <VideoViewer
-          key={src}
+          key={isPhone ? 'phone' : src}
           src={src}
+          phoneStream={isPhone ? phoneStream : undefined}
+          phonePlateOcr={isPhone && Boolean(watchlistWorkspaceId)}
           samplePlate={source === 'plate'}
           isSampleClip={source === 'traffic' || source === 'plate'}
-          intelSettings={intelSettings}
+          intelSettings={isPhone ? phoneSettings : intelSettings}
           onInspectEvent={onInspectEvent}
           observation={
-            workspaceId
+            workspaceId && !isPhone
               ? {
                   workspaceId,
                   cameraId: source === 'camera' ? cameraId : undefined,
@@ -1434,7 +1549,7 @@ export default function VideoAnalysis({
                 }
               : undefined
           }
-          watchlistWorkspaceId={watchlistWorkspaceId}
+          watchlistWorkspaceId={isPhone ? undefined : watchlistWorkspaceId}
         />
       )}
     </section>
