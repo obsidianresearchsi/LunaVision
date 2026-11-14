@@ -1296,6 +1296,7 @@ export default function WorkspacePortal({ agency, platformView }: { agency: bool
                   <section className="lv-card">
                     <VideoAnalysis
                       workspaceId={selected}
+                      allowPhoneFaceSearch={agency && features.face_search && canOpenPanel('gallery')}
                       watchlistWorkspaceId={agency && features.anpr ? selected : undefined}
                       samples
                       onInspectEvent={inspectEvent}

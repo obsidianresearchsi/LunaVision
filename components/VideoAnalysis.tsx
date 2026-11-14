@@ -127,6 +127,7 @@ function VideoViewer({
   src,
   phoneStream,
   phonePlateOcr = false,
+  phoneFaceWorkspaceId,
   samplePlate,
   isSampleClip,
   watchlistWorkspaceId,
@@ -137,6 +138,7 @@ function VideoViewer({
   src?: string;
   phoneStream?: MediaStream;
   phonePlateOcr?: boolean;
+  phoneFaceWorkspaceId?: string;
   samplePlate: boolean;
   isSampleClip: boolean;
   watchlistWorkspaceId?: string;
@@ -164,6 +166,7 @@ function VideoViewer({
   const [autoSave, setAutoSave] = useState(true);
   const [autoAnpr, setAutoAnpr] = useState(phonePlateOcr || Boolean(watchlistWorkspaceId && intelSettings.capabilities.anpr?.enabled));
   const [autoFaceScan, setAutoFaceScan] = useState(Boolean(observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true'));
+  const canSearchPhoneFaces = Boolean(phoneFaceWorkspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true');
   const saveLock = useRef(false);
   const saveAction = useRef<() => void>(() => {});
   const lastAutoSave = useRef(0);
@@ -171,6 +174,7 @@ function VideoViewer({
   const plateOcrInFlight = useRef(false);
   const lastFaceScanMs = useRef(0);
   const faceScanInFlight = useRef(false);
+  const phoneFaceRequest = useRef<AbortController | null>(null);
   const agencyRulesRef = useRef<AgencyRuleRecord[]>([]);
   const plateConsensusRef = useRef(new PlateConsensusBuffer(phoneStream ? 12000 : 5000));
   const lastRecordedPlateRef = useRef<{ plate: string; ms: number }>({ plate: '', ms: 0 });
@@ -275,6 +279,81 @@ function VideoViewer({
       return hiCanvas;
     } catch {
       return fallbackCanvas;
+    }
+  }
+
+  useEffect(() => {
+    if (!canSearchPhoneFaces || !autoFaceScan) return;
+    function onVisibilityChange() {
+      if (document.hidden) phoneFaceRequest.current?.abort();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      phoneFaceRequest.current?.abort();
+    };
+  }, [canSearchPhoneFaces, autoFaceScan, detecting, frozen, phonePlaying]);
+
+  async function searchPhoneFrame(frame: HTMLCanvasElement, isCurrent: () => boolean) {
+    if (!phoneFaceWorkspaceId || phoneFaceRequest.current) return;
+    const controller = new AbortController();
+    phoneFaceRequest.current = controller;
+    const timer = setTimeout(() => controller.abort(), 25000);
+    const canShowResult = () => mounted.current && isCurrent() && !document.hidden && !video.current?.paused;
+    setFaceScanStatus('Checking the current frame against enrolled agency records…');
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in again to use live face search.');
+      const blob = await new Promise<Blob | null>(resolve => frame.toBlob(resolve, 'image/jpeg', 0.82));
+      if (!blob || blob.size > 1_250_000) throw new Error('Could not prepare the camera frame for search.');
+      if (!canShowResult()) return;
+      controller.signal.throwIfAborted();
+
+      const body = new FormData();
+      body.set('action', 'search_database');
+      body.set('photo', blob, 'phone-camera-frame.jpg');
+      body.set('notes', 'Live phone camera search');
+      const response = await fetch('/api/face-intelligence', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'X-Workspace-Id': phoneFaceWorkspaceId },
+        body,
+        signal: controller.signal,
+      });
+      const result = await response.json().catch(() => null);
+      if (!canShowResult()) return;
+      controller.signal.throwIfAborted();
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403 || response.status === 429 || response.status === 503) {
+          setAutoFaceScan(false);
+        }
+        if (response.status === 422) {
+          setFaceMatches([]);
+          setFaceScanStatus('No clear face in this frame. Keep the face in view.');
+          return;
+        }
+        throw new Error(typeof result?.error === 'string' ? result.error : 'Live face search could not complete.');
+      }
+
+      const candidates: FaceMatchBanner[] = Array.isArray(result?.matches)
+        ? result.matches.filter((item: FaceMatchBanner) =>
+          item.band === 'high' && typeof item.full_name === 'string' && Number.isFinite(item.confidence))
+          .slice(0, 3)
+          .map((item: FaceMatchBanner) => ({ ...item, occurred_at: new Date().toISOString() }))
+        : [];
+      setFaceMatches(candidates);
+      setFaceScanStatus(candidates.length
+        ? 'Possible match found. Verify the person before relying on this result.'
+        : 'No high-confidence match in the latest frame.');
+    } catch (error) {
+      if (!canShowResult()) return;
+      setFaceMatches([]);
+      setFaceScanStatus(controller.signal.aborted
+        ? 'The latest face search timed out.'
+        : error instanceof Error ? error.message : 'Live face search could not complete.');
+    } finally {
+      clearTimeout(timer);
+      phoneFaceRequest.current = null;
     }
   }
 
@@ -594,6 +673,14 @@ function VideoViewer({
             const hiCanvas = captureHiResCanvas(media, frame, 1280);
             void scanCanvasForFaces(hiCanvas, false);
           }
+          if (
+            phoneStream && canSearchPhoneFaces && autoFaceScan &&
+            !phoneFaceRequest.current && nowMs - lastFaceScanMs.current >= 10000 &&
+            objects.some(object => object.class === 'person' && object.score >= 0.45)
+          ) {
+            lastFaceScanMs.current = nowMs;
+            void searchPhoneFrame(captureHiResCanvas(media, frame, 1024), () => !cancelled);
+          }
 
           // Background Automatic ANPR on detected vehicles when enabled
           if (
@@ -642,7 +729,7 @@ function VideoViewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [detecting, frozen, size, autoAnpr, autoFaceScan, phoneStream, phonePlateOcr, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
+  }, [detecting, frozen, size, autoAnpr, autoFaceScan, phoneStream, phonePlateOcr, canSearchPhoneFaces, phoneFaceWorkspaceId, watchlistWorkspaceId, observation?.workspaceId, observation?.cameraId, isSampleClip]);
 
   async function runBackgroundPlateOcr(sourceCanvas: HTMLCanvasElement, region: Box, vehicleClass: string, isCurrent: () => boolean) {
     plateOcrInFlight.current = true;
@@ -881,7 +968,8 @@ function VideoViewer({
       {/* Real-time Face Recognition Match Alert Banner */}
       {faceMatches.length > 0 && (
         <div
-          role="alert"
+          role={phoneStream ? 'region' : 'alert'}
+          aria-label={phoneStream ? 'Possible face matches' : undefined}
           className="lv-card"
           style={{
             marginBottom: '0.85rem',
@@ -891,9 +979,9 @@ function VideoViewer({
         >
           <div className="lv-card-top">
             <strong style={{ fontSize: '1rem', fontWeight: 800 }}>
-              BIOMETRIC FACE RECOGNITION MATCH ({faceMatches.length})
+              {phoneStream ? 'Possible face matches' : 'BIOMETRIC FACE RECOGNITION MATCH'} ({faceMatches.length})
             </strong>
-            <span className="lunar-badge high">FACE++ MATCH</span>
+            <span className="lunar-badge high">{phoneStream ? 'VERIFY MATCH' : 'FACE++ MATCH'}</span>
           </div>
           {faceMatches.map((fm) => (
             <div
@@ -923,7 +1011,7 @@ function VideoViewer({
                     {fm.subject_code && <span className="lv-badge" style={{ fontWeight: 700 }}>{fm.subject_code}</span>}
                   </div>
                   <small style={{ color: '#fde68a', fontWeight: 700 }}>
-                    {fm.confidence.toFixed(1)}% ({fm.band.toUpperCase()}) · {fm.category} · Threat: {fm.threat_level} · {new Date(fm.occurred_at).toLocaleTimeString()}
+                    {fm.confidence.toFixed(1)}% ({fm.band.toUpperCase()}){!phoneStream && ` · ${fm.category} · Threat: ${fm.threat_level}`} · {new Date(fm.occurred_at).toLocaleTimeString()}
                   </small>
                 </div>
               </div>
@@ -1266,6 +1354,17 @@ function VideoViewer({
                   <span>{phoneStream ? 'Read license plates live' : 'Real-time background ANPR matching'}</span>
                 </label>
               )}
+              {canSearchPhoneFaces && (
+                <button type="button" aria-pressed={autoFaceScan} disabled={!autoFaceScan && (!ready || !detecting)}
+                  onClick={() => {
+                    if (autoFaceScan) phoneFaceRequest.current?.abort();
+                    setFaceMatches([]);
+                    setFaceScanStatus(autoFaceScan ? '' : 'Live face search is on. Keep the person in view.');
+                    setAutoFaceScan(!autoFaceScan);
+                  }}>
+                  {autoFaceScan ? 'Stop live face search' : 'Start live face search'}
+                </button>
+              )}
               {observation?.workspaceId && import.meta.env.VITE_FACE_COMPARISON_ENABLED === 'true' && (
                 <label className="lv-inline-check" style={{ marginLeft: '0.5rem' }}>
                   <input
@@ -1280,6 +1379,9 @@ function VideoViewer({
           )
         )}
       </div>
+      {canSearchPhoneFaces && !frozen && (
+        <p>Live face search sends sampled frames to the agency’s face search service. Use it with people who agree to the check.</p>
+      )}
       {frozen && (
         <p>
           {samplePlate
@@ -1358,6 +1460,7 @@ export default function VideoAnalysis({
   cameraName,
   cameraLocation,
   workspaceId,
+  allowPhoneFaceSearch = false,
   watchlistWorkspaceId,
   samples = false,
   onInspectEvent,
@@ -1367,6 +1470,7 @@ export default function VideoAnalysis({
   cameraName?: string;
   cameraLocation?: string;
   workspaceId?: string;
+  allowPhoneFaceSearch?: boolean;
   watchlistWorkspaceId?: string;
   samples?: boolean;
   onInspectEvent?: (eventId: string) => void;
@@ -1488,7 +1592,7 @@ export default function VideoAnalysis({
       <h2>Video analysis & live intelligence</h2>
       <p>
         Detect, classify, track, and count people and vehicles in real time, monitor zones, and match vehicle number
-        plates. Footage is processed locally in this browser.
+        plates. Object detection and plate reading run locally in this browser.
       </p>
       <div className="lv-video-actions">
         {cameraUrl && (
@@ -1528,7 +1632,7 @@ export default function VideoAnalysis({
       {!src && !isPhone && <p>{workspaceId ? 'Choose a video or start the phone camera to analyze live footage.' : 'Choose a video to start analysis.'}</p>}
       {isPhone && phoneStarting && <p role="status">Waiting for camera permission…</p>}
       {isPhone && phoneError && <p role="alert">{phoneError}</p>}
-      {isPhone && phoneStream && <p>Phone analysis runs on this device.{watchlistWorkspaceId && ' Hold the camera steady and bring the plate into clear view.'}</p>}
+      {isPhone && phoneStream && <p>Object detection runs on this device.{watchlistWorkspaceId && ' Hold the camera steady and bring the plate into clear view.'}</p>}
       {source === 'traffic' && (
         <p>
           Practice footage. Object detection starts automatically. Press play to analyze more frames.{' '}
@@ -1564,10 +1668,11 @@ export default function VideoAnalysis({
       )}
       {(src || (isPhone && phoneStream)) && (
         <VideoViewer
-          key={isPhone ? 'phone' : src}
+          key={isPhone ? `phone:${workspaceId ?? ''}:${allowPhoneFaceSearch}` : src}
           src={src}
           phoneStream={isPhone ? phoneStream : undefined}
           phonePlateOcr={isPhone && Boolean(watchlistWorkspaceId)}
+          phoneFaceWorkspaceId={isPhone && allowPhoneFaceSearch ? workspaceId : undefined}
           samplePlate={source === 'plate'}
           isSampleClip={source === 'traffic' || source === 'plate'}
           intelSettings={isPhone ? phoneSettings : intelSettings}
