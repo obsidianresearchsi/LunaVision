@@ -279,6 +279,7 @@ describe('FaceComparison component', () => {
   it('captures a probe photo from a connected device or phone camera and submits face search', async () => {
     vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
     const stopTrack = vi.fn();
+    const originalMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
     const getUserMedia = vi.fn().mockResolvedValue({
       getTracks: () => [{ stop: stopTrack }],
     });
@@ -314,7 +315,7 @@ describe('FaceComparison component', () => {
       });
 
       const openCamBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-        b.textContent?.includes('Use Phone / Device Camera'),
+        b.textContent?.trim() === 'Open live camera',
       )!;
       await act(async () => {
         openCamBtn.click();
@@ -322,7 +323,9 @@ describe('FaceComparison component', () => {
       for (let i = 0; i < 3; i++) await act(async () => { await Promise.resolve(); });
 
       expect(getUserMedia).toHaveBeenCalled();
-      expect(host.querySelector('video[aria-label="Live device camera viewfinder"]')).toBeTruthy();
+      const video = host.querySelector('video[aria-label="Live device camera viewfinder"]');
+      expect(video).toBeTruthy();
+      Object.defineProperties(video!, { videoWidth: { value: 640 }, videoHeight: { value: 480 } });
 
       const captureBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
         b.textContent?.trim() === 'Capture Photo',
@@ -344,7 +347,30 @@ describe('FaceComparison component', () => {
       getCtxSpy.mockRestore();
       toBlobSpy.mockRestore();
       playSpy.mockRestore();
+      if (originalMediaDevices) Object.defineProperty(navigator, 'mediaDevices', originalMediaDevices);
+      else Reflect.deleteProperty(navigator, 'mediaDevices');
     }
+  });
+
+  it.each([true, false])('accepts a phone photo without the live camera API (face search=%s)', async gallery => {
+    vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy;
+    await act(async () => root.render(<FaceComparison workspaceId="ws-ag-1" gallery={gallery} />));
+
+    const captureInput = host.querySelector<HTMLInputElement>('input[capture="environment"]')!;
+    const openPicker = vi.spyOn(captureInput, 'click').mockImplementation(() => {});
+    const takePhoto = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Take photo')!;
+    await act(async () => takePhoto.click());
+    expect(openPicker).toHaveBeenCalledOnce();
+
+    const file = new File(['camera photo'], 'phone.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(captureInput, 'files', { value: [file] });
+    await act(async () => captureInput.dispatchEvent(new Event('change', { bubbles: true })));
+    expect(host.textContent).toContain('phone.jpg');
+    const upload = host.querySelector<HTMLInputElement>(gallery ? 'input[name="probe"]' : 'input[name="reference"]')!;
+    expect(upload.required).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
