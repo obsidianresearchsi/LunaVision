@@ -461,6 +461,7 @@ export async function handleFaceIntelligence(
     // Action 2: 1:N Search Across the Agency's Isolated FaceSet + Audit Log
     // -----------------------------------------------------------------------
     if (action === 'search_database') {
+      const livePhoneSearch = form.get('search_mode') === 'live_phone';
       const { data: featMap } = await client.rpc('lv_workspace_feature_map', { target: workspaceId });
       if (featMap && (featMap as any).face_search === false) {
         return json(403, { error: 'Face search is disabled for this organization.' });
@@ -495,6 +496,9 @@ export async function handleFaceIntelligence(
       if (probeFaces.length === 0) {
         return json(422, { error: 'No face detected in the probe image. Use a clearer frontal or near-frontal shot.' });
       }
+      if (livePhoneSearch && probeFaces.length !== 1) {
+        return json(422, { error: 'Keep one person in view at a time for live face search.' });
+      }
 
       const probeFace = probeFaces[0];
       const probeToken = String(probeFace.face_token || '');
@@ -504,11 +508,16 @@ export async function handleFaceIntelligence(
         headpose: probeFace.attributes?.headpose ?? null,
         faces_in_probe: probeFaces.length,
       };
+      const quality = probeFace.attributes?.facequality;
+      if (livePhoneSearch && Number.isFinite(quality?.value) && Number.isFinite(quality?.threshold)
+          && quality.value < quality.threshold) {
+        return json(422, { error: 'The face is too unclear to compare. Move closer, face the camera and hold it steady.' });
+      }
 
       const searchStartedAt = Date.now();
 
       // 2. Ensure FaceSet exists & run 1:N /search
-      await ensureAgencyFaceset(baseUrl, apiKey, apiSecret, outerId);
+      if (!livePhoneSearch) await ensureAgencyFaceset(baseUrl, apiKey, apiSecret, outerId);
       const searchForm = new FormData();
       searchForm.set('api_key', apiKey);
       searchForm.set('api_secret', apiSecret);
@@ -526,7 +535,7 @@ export async function handleFaceIntelligence(
       } else {
         const msg = String(searchRes.data?.error_message || '');
         // Empty/unindexed FaceSets are expected when relying on direct compare fallback
-        if (!msg.includes('EMPTY') && !msg.includes('INVALID_OUTER_ID') && !msg.includes('INTERNAL_ERROR')) {
+        if (!msg.includes('EMPTY') && !msg.includes('INVALID_OUTER_ID') && !msg.includes('FACESET_NOT_EXIST') && !msg.includes('INTERNAL_ERROR')) {
           return json(502, { error: `Face++ 1:N search failed: ${msg || 'Provider error'}` });
         }
       }
@@ -606,7 +615,8 @@ export async function handleFaceIntelligence(
 
       // Phase 2: Direct /compare fallback across active workspace subjects not yet matched in Phase 1
       let fallbackCompared = 0;
-      if (matchesBySubject.size < 5) {
+      const hasStrongIndexedCandidate = [...matchesBySubject.values()].some(match => match.band === 'high');
+      if (matchesBySubject.size < 5 && !(livePhoneSearch && hasStrongIndexedCandidate)) {
         const fb = await fallbackCompareGallery({
           baseUrl,
           apiKey,

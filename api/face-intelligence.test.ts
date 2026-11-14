@@ -184,7 +184,7 @@ describe('api/face-intelligence', () => {
     expect((fetchMock.mock.calls[2][1].body as FormData).get('outer_id')).toBe(OUTER_ID);
   });
 
-  it('performs 1:N search, hydrates multi-angle dossiers, classifies confidence band, and logs audit history', async () => {
+  it.each([false, true])('hydrates and audits indexed matches with live phone mode=%s', async livePhone => {
     setupSupabaseMock({
       role: 'investigator',
       subjects: [
@@ -225,11 +225,9 @@ describe('api/face-intelligence', () => {
             },
           ],
         }),
-      )
-      // 2. /faceset/getdetail
-      .mockResolvedValueOnce(Response.json({ faceset_token: 'fset_01', outer_id: OUTER_ID }))
-      // 3. /search (matches side-angle token ftok_angle_left + lower score primary token)
-      .mockResolvedValueOnce(
+      );
+    if (!livePhone) fetchMock.mockResolvedValueOnce(Response.json({ faceset_token: 'fset_01', outer_id: OUTER_ID }));
+    fetchMock.mockResolvedValueOnce(
         Response.json({
           thresholds: { '1e-3': 62.3, '1e-4': 69.1, '1e-5': 73.9 },
           results: [
@@ -242,6 +240,7 @@ describe('api/face-intelligence', () => {
 
     const req = makeFormRequest('search_database', {
       photo: new File([new Uint8Array(64).fill(5)], 'gate-cam.jpg', { type: 'image/jpeg' }),
+      ...(livePhone && { search_mode: 'live_phone' }),
       case_reference: 'CR-404',
       notes: 'Camera 3 match check',
       probe_snapshot_path: `${WORKSPACE_ID}/probes/snap.jpg`,
@@ -250,6 +249,12 @@ describe('api/face-intelligence', () => {
     expect(res.status).toBe(200);
 
     const body = await res.json();
+    if (livePhone) {
+      expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        '/facepp/v3/detect', '/facepp/v3/search',
+      ]);
+      expect(body.fallback_compared).toBe(0);
+    }
     expect(body.search_id).toBe('search-log-001');
     expect(body.faceset_outer_id).toBe(OUTER_ID);
     expect(body.matches).toHaveLength(1);
@@ -271,6 +276,21 @@ describe('api/face-intelligence', () => {
         case_ref: 'CR-404',
       }),
     );
+  });
+
+  it('asks for a clearer single face before making an indexed live search', async () => {
+    setupSupabaseMock({ role: 'investigator' });
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({
+      faces: [{ face_token: 'probe', attributes: { facequality: { value: 35, threshold: 60 } } }],
+    }));
+    globalThis.fetch = fetchMock as any;
+    const response = await handleFaceIntelligence(makeFormRequest('search_database', {
+      search_mode: 'live_phone',
+      photo: new File(['probe'], 'frame.jpg', { type: 'image/jpeg' }),
+    }), makeEnv());
+    expect(response.status).toBe(422);
+    expect((await response.json()).error).toContain('Move closer');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('enforces supervisor+ role for remove_face and deletes tokens from agency FaceSet', async () => {

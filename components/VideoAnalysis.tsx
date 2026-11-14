@@ -338,6 +338,7 @@ function VideoViewer({
 
       const body = new FormData();
       body.set('action', 'search_database');
+      body.set('search_mode', 'live_phone');
       body.set('photo', blob, 'phone-camera-frame.jpg');
       body.set('notes', 'Live phone camera search');
       const response = await fetch('/api/face-intelligence', {
@@ -355,22 +356,25 @@ function VideoViewer({
         }
         if (response.status === 422) {
           setFaceMatches([]);
-          setFaceScanStatus('No clear face in this frame. Keep the face in view.');
+          setFaceScanStatus(typeof result?.error === 'string' ? result.error : 'No clear face in this frame. Keep the face in view.');
           return;
         }
         throw new Error(typeof result?.error === 'string' ? result.error : 'Live face search could not complete.');
       }
 
-      const candidates: FaceMatchBanner[] = Array.isArray(result?.matches)
-        ? result.matches.filter((item: FaceMatchBanner) =>
-          item.band === 'high' && typeof item.full_name === 'string' && Number.isFinite(item.confidence))
-          .slice(0, 3)
-          .map((item: FaceMatchBanner) => ({ ...item, occurred_at: new Date().toISOString() }))
-        : [];
+      const matches: FaceMatchBanner[] = Array.isArray(result?.matches) ? result.matches : [];
+      const candidates = matches.filter(item => (item?.band === 'high' || item?.band === 'medium')
+        && typeof item.full_name === 'string' && Number.isFinite(item.confidence))
+        .slice(0, 3)
+        .map(item => ({ ...item, occurred_at: new Date().toISOString() }));
       setFaceMatches(candidates);
-      setFaceScanStatus(candidates.length
-        ? 'Possible match found. Verify the person before relying on this result.'
-        : 'No high-confidence match in the latest frame.');
+      if (candidates.length) {
+        setFaceScanStatus('Possible match found. Verify the person before relying on this result.');
+      } else if (matches.length) {
+        setFaceScanStatus('The closest result was below the review threshold. Try a closer, front-facing view.');
+      } else {
+        setFaceScanStatus('No match returned. Check that the reference photo is enrolled in this agency workspace.');
+      }
     } catch (error) {
       if (!canShowResult()) return;
       setFaceMatches([]);
@@ -707,11 +711,11 @@ function VideoViewer({
           }
           if (
             phoneStream && canSearchPhoneFaces && autoFaceScan &&
-            !phoneFaceRequest.current && nowMs - lastFaceScanMs.current >= 10000 &&
+            !phoneFaceRequest.current && nowMs - lastFaceScanMs.current >= 5000 &&
             objects.some(object => object.class === 'person' && object.score >= 0.45)
           ) {
             lastFaceScanMs.current = nowMs;
-            void searchPhoneFrame(captureHiResCanvas(media, frame, 1024), () => !cancelled);
+            void searchPhoneFrame(captureHiResCanvas(media, frame, 1280), () => !cancelled);
           }
 
           // Background Automatic ANPR on detected vehicles when enabled

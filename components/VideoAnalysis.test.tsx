@@ -91,7 +91,7 @@ describe('Phone camera analysis', () => {
   it.each([false, true])('analyzes phone frames at a fixed timestamp with face access=%s', async allowPhoneFaceSearch => {
     vi.stubEnv('VITE_FACE_COMPARISON_ENABLED', 'true');
     const fetchFrame = vi.fn(async () => Response.json({ matches: [
-      { subject_id: 'candidate-1', full_name: 'Test Candidate', band: 'high', confidence: 93 },
+      { subject_id: 'candidate-1', full_name: 'Test Candidate', band: 'medium', confidence: 71 },
       { subject_id: 'candidate-2', full_name: 'Low Confidence Candidate', band: 'investigative', confidence: 61 },
     ] }));
     vi.stubGlobal('fetch', fetchFrame);
@@ -141,6 +141,8 @@ describe('Phone camera analysis', () => {
         headers: { Authorization: 'Bearer test-token', 'X-Workspace-Id': 'agency' },
         body: expect.any(FormData),
       }));
+      const [, request] = fetchFrame.mock.calls[0] as unknown as [string, RequestInit];
+      expect((request.body as FormData).get('search_mode')).toBe('live_phone');
       expect(host.textContent).toContain('Test Candidate');
       expect(host.textContent).not.toContain('Low Confidence Candidate');
       await click('Stop live face search');
