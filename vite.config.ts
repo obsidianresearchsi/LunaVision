@@ -6,6 +6,22 @@ import { loadEnv, type Plugin, type ViteDevServer } from 'vite';
 import { issueAgencyAccount } from './api/agency-accounts';
 import { compareFaces } from './api/face-compare';
 import { handleFaceIntelligence } from './api/face-intelligence';
+import unavailableResponse from './middleware';
+
+function siteUnavailable(): Plugin {
+  const configure = (server: Pick<ViteDevServer, 'middlewares'>) => {
+    server.middlewares.use(async (req, res) => {
+      const response = unavailableResponse(new Request('http://localhost', { method: req.method }));
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      res.end(await response.text());
+    });
+  };
+  return {
+    name: 'site-unavailable',
+    configureServer: configure,
+    configurePreviewServer: configure,
+  };
+}
 
 function mountPostApi(
   server: Pick<ViteDevServer, 'middlewares'>,
@@ -92,7 +108,7 @@ export default defineConfig(({ mode }) => ({
     port: 3000,
     host: '0.0.0.0',
   },
-  plugins: [react(), localAgencyApi(mode)],
+  plugins: [siteUnavailable(), react(), localAgencyApi(mode)],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),

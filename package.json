@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:site-lock": "node tests/site-lock.integration.mjs",
     "test:agency": "node tests/agency-operations.integration.mjs",
     "dev": "vite",
     "build": "vite build",
